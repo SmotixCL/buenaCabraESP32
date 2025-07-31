@@ -1,0 +1,59 @@
+/*
+ * Configuración LMIC para Heltec WiFi LoRa 32 V3 - SX1262
+ * VERSIÓN CORREGIDA PARA EVITAR CONFLICTOS DE COMPILACIÓN
+ */
+
+#ifndef _LMIC_PROJECT_CONFIG_H_
+#define _LMIC_PROJECT_CONFIG_H_
+
+// *** VERIFICACIÓN DE CONFLICTOS ***
+#ifdef CFG_sx1276_radio
+#undef CFG_sx1276_radio
+#endif
+
+#ifdef CFG_us915
+#undef CFG_us915
+#endif
+
+// *** CONFIGURACIÓN DE RADIO - SOLO SX1262 ***
+#define CFG_sx1262_radio 1
+
+// *** CONFIGURACIÓN DE REGIÓN - SOLO AU915 ***
+#define CFG_au915 1
+
+// *** CONFIGURACIÓN ESPECÍFICA AU915 ***
+#define CFG_au915_us_like 1
+
+// *** VERSIÓN LORAWAN ***
+#define LMIC_LORAWAN_SPEC_VERSION LMIC_LORAWAN_SPEC_VERSION_1_0_3
+
+// *** OPTIMIZACIONES DE MEMORIA ***
+#define DISABLE_PING 1
+#define DISABLE_BEACONS 1
+#define DISABLE_MCMD_DCAP_REQ 1
+#define DISABLE_MCMD_DN2P_SET 1
+
+// *** CONFIGURACIÓN AES ORIGINAL ***
+#define USE_ORIGINAL_AES 1
+
+// *** DEBUG PARA DESARROLLO ***
+#define LMIC_DEBUG_LEVEL 1
+#define LMIC_PRINTF_TO Serial
+
+// *** CONFIGURACIÓN ESPECÍFICA HELTEC V3 ***
+#define HELTEC_WIFI_LORA_32_V3 1
+
+// *** TIMING Y RADIO ***
+#define LMIC_USE_INTERRUPTS 1
+#define OSTICKS_PER_SEC 32768
+
+// *** VERIFICACIÓN FINAL ***
+#if defined(CFG_sx1276_radio) && defined(CFG_sx1262_radio)
+#error "Solo puede estar definido un tipo de radio"
+#endif
+
+#if !defined(CFG_au915) && !defined(CFG_eu868) && !defined(CFG_us915)
+#error "Debe definirse una región LoRaWAN"
+#endif
+
+#endif // _LMIC_PROJECT_CONFIG_H_
