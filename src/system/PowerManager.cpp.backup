@@ -1,0 +1,17 @@
+#include "PowerManager.h"
+
+PowerManager::PowerManager(uint8_t vbatPin) : vbatPin(vbatPin), batteryVoltage(3.7), lowPowerMode(false) {}
+
+void PowerManager::readBattery() {
+    int raw = analogRead(vbatPin);
+    batteryVoltage = (raw * 3.3 * 2.0) / 4095.0; // Asumiendo divisor 2:1
+    lowPowerMode = (batteryVoltage < 3.4); // Umbral ejemplo
+}
+
+float PowerManager::getVoltage() const {
+    return batteryVoltage;
+}
+
+bool PowerManager::isLowPower() const {
+    return lowPowerMode;
+}
