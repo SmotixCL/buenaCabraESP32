@@ -7,6 +7,7 @@ Collar inteligente que monitorea posición GPS y transmite por LoRaWAN, con aler
 ![Status](https://img.shields.io/badge/Status-Functional-brightgreen)
 ![Hardware](https://img.shields.io/badge/Hardware-Heltec%20WiFi%20LoRa%2032%20V3-blue)
 ![Protocol](https://img.shields.io/badge/Protocol-LoRaWAN%201.0.3-orange)
+![License](https://img.shields.io/badge/License-MIT-yellow)
 
 ---
 
@@ -220,14 +221,36 @@ src/
 
 Este proyecto está licenciado bajo MIT License - ver [LICENSE](LICENSE) para detalles.
 
+**¿Qué significa MIT License?** Es una licencia muy permisiva que permite:
+- ✅ Uso comercial y personal
+- ✅ Modificación y distribución
+- ✅ Uso privado sin restricciones
+- ✅ Solo requiere mantener copyright y licencia
+
 ---
 
 ## 👨‍💻 Autor
 
-**Sistema Collar LoRaWAN Geofencing**
-- Arquitectura modular profesional
-- Optimizado para producción
-- Compatible con ChirpStack v3+
+**[Smotix](https://github.com/Smotix)**
+
+🚀 **Desarrollador de sistemas IoT y LoRaWAN**
+- Especialista en arquitecturas modulares ESP32
+- Sistemas de geofencing y tracking
+- Optimización de consumo energético
+- Integración ChirpStack y backends profesionales
+
+📧 **Contacto**: Para consultas técnicas, abrir un [Issue](../../issues)
+
+---
+
+## 🏆 Logros del Proyecto
+
+- ⚡ **Sistema estable 24/7** - Sin reinicios
+- 🔋 **Autonomía récord** - 4-6 meses
+- 📡 **LoRaWAN funcional** - AU915 Chile
+- 🎯 **Arquitectura modular** - Fácil mantenimiento
+- 🛠️ **Debugging avanzado** - LED patterns + OLED
+- 📱 **Backend completo** - FastAPI + PostgreSQL
 
 ---
 
@@ -237,7 +260,18 @@ Este proyecto está licenciado bajo MIT License - ver [LICENSE](LICENSE) para de
 - **RadioLib** - Librería LoRaWAN
 - **ChirpStack** - Network Server
 - **OpenStreetMap** - Mapas del backend
+- **Comunidad IoT** - Feedback y testing
+
+---
+
+## 📊 Stats del Proyecto
+
+![GitHub stars](https://img.shields.io/github/stars/Smotix/collar-lorawan-geofencing?style=social)
+![GitHub forks](https://img.shields.io/github/forks/Smotix/collar-lorawan-geofencing?style=social)
+![GitHub issues](https://img.shields.io/github/issues/Smotix/collar-lorawan-geofencing)
 
 ---
 
 **¿Preguntas?** Abrir un [Issue](../../issues) o consultar la [Wiki](../../wiki).
+
+**⭐ Si este proyecto te sirvió, dale una estrella!**
