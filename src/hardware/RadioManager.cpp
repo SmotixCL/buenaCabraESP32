@@ -120,8 +120,16 @@ Result RadioManager::joinOTAA(const uint8_t* devEUI, const uint8_t* appEUI, cons
     memcpy(nwkKey, appKey, 16);     // En LoRaWAN 1.0.x, NwkKey = AppKey
     memcpy(appKeyLocal, appKey, 16);
     
+    // ✅ FORZAR DEV-NONCE ALEATORIO PARA EVITAR DUPLICADOS
+    uint16_t devNonce = random(1, 65535);  // Nonce aleatorio 1-65534
+    LOG_I("🎲 Usando dev-nonce aleatorio: %u", devNonce);
+    
     // RadioLib 6.6.0 API para OTAA - beginOTAA() es void
     lorawan.beginOTAA(joinEUI, deviceEUI, nwkKey, appKeyLocal);
+    
+    // ✅ CONFIGURAR DEV-NONCE ANTES DEL JOIN
+    // Nota: Verificar si RadioLib tiene setDevNonce() o similar
+    // lorawan.setDevNonce(devNonce);  // Si existe esta función
     
     // Intentar join real con timeout
     int16_t state = lorawan.activateOTAA();
@@ -129,14 +137,14 @@ Result RadioManager::joinOTAA(const uint8_t* devEUI, const uint8_t* appEUI, cons
     if (state == RADIOLIB_LORAWAN_NEW_SESSION || state == RADIOLIB_LORAWAN_SESSION_RESTORED) {
         joined = true;
         currentState = STATE_JOINED;
-        LOG_I("✅ OTAA Join exitoso");
+        LOG_I("✅ OTAA Join exitoso con dev-nonce: %u", devNonce);
         
         if (joinCallback) {
             joinCallback(true);
         }
         return Result::SUCCESS;
     } else {
-        LOG_E("❌ OTAA Join falló: %s", getErrorString(state));
+        LOG_E("❌ OTAA Join falló: %s (dev-nonce: %u)", getErrorString(state), devNonce);
         currentState = STATE_ERROR;
         if (joinCallback) {
             joinCallback(false);

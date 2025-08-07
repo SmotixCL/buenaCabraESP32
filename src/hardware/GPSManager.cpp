@@ -298,19 +298,43 @@ bool GPSManager::parseGGA(const char* sentence) {
     
     if (!nmeaData.fixValid) return true; // No hay fix, pero parsing OK
     
-    // Latitud (campos 2 y 3)
+    // ===== LATITUD (campos 2 y 3) =====
+    // Leer valor de latitud en formato NMEA (ddmm.mmmm)
     if (!getField(sentence, 2, field, sizeof(field))) return false;
-    double lat = parseFloat(field);
-    if (!getField(sentence, 3, field, sizeof(field))) return false;
-    nmeaData.latitude = parseCoordinate(field, field);
-    if (lat > 0) nmeaData.latitude = lat / 100.0;
+    double latRaw = parseFloat(field);
     
-    // Longitud (campos 4 y 5)
+    // Leer dirección N/S
+    if (!getField(sentence, 3, field, sizeof(field))) return false;
+    char latDirection = field[0];
+    
+    // Convertir de NMEA (ddmm.mmmm) a grados decimales
+    int latDeg = (int)(latRaw / 100);           // Grados
+    double latMin = latRaw - (latDeg * 100);    // Minutos decimales
+    nmeaData.latitude = latDeg + (latMin / 60.0); // Grados decimales
+    
+    // Aplicar dirección (Sur = negativo)
+    if (latDirection == 'S') {
+        nmeaData.latitude = -nmeaData.latitude;
+    }
+    
+    // ===== LONGITUD (campos 4 y 5) =====
+    // Leer valor de longitud en formato NMEA (dddmm.mmmm)
     if (!getField(sentence, 4, field, sizeof(field))) return false;
-    double lng = parseFloat(field);
+    double lngRaw = parseFloat(field);
+    
+    // Leer dirección E/W
     if (!getField(sentence, 5, field, sizeof(field))) return false;
-    nmeaData.longitude = parseCoordinate(field, field);
-    if (lng > 0) nmeaData.longitude = lng / 100.0;
+    char lngDirection = field[0];
+    
+    // Convertir de NMEA (dddmm.mmmm) a grados decimales
+    int lngDeg = (int)(lngRaw / 100);           // Grados
+    double lngMin = lngRaw - (lngDeg * 100);    // Minutos decimales
+    nmeaData.longitude = lngDeg + (lngMin / 60.0); // Grados decimales
+    
+    // Aplicar dirección (Oeste = negativo)
+    if (lngDirection == 'W') {
+        nmeaData.longitude = -nmeaData.longitude;
+    }
     
     // Satélites (campo 7)
     if (!getField(sentence, 7, field, sizeof(field))) return false;
@@ -323,22 +347,6 @@ bool GPSManager::parseGGA(const char* sentence) {
     // Altitud (campo 9)
     if (!getField(sentence, 9, field, sizeof(field))) return false;
     nmeaData.altitude = parseFloat(field);
-    
-    // Convertir formato NMEA a grados decimales
-    int latDeg = (int)(nmeaData.latitude / 100);
-    float latMin = nmeaData.latitude - (latDeg * 100);
-    nmeaData.latitude = latDeg + (latMin / 60.0);
-    
-    int lngDeg = (int)(nmeaData.longitude / 100);
-    float lngMin = nmeaData.longitude - (lngDeg * 100);
-    nmeaData.longitude = lngDeg + (lngMin / 60.0);
-    
-    // Aplicar dirección N/S, E/W
-    if (!getField(sentence, 3, field, sizeof(field))) return false;
-    if (field[0] == 'S') nmeaData.latitude = -nmeaData.latitude;
-    
-    if (!getField(sentence, 5, field, sizeof(field))) return false;
-    if (field[0] == 'W') nmeaData.longitude = -nmeaData.longitude;
     
     // Actualizar posición si es válida
     if (isValidPosition(nmeaData.latitude, nmeaData.longitude) && passesAccuracyFilter()) {
@@ -354,6 +362,12 @@ bool GPSManager::parseGGA(const char* sentence) {
         newDataAvailable = true;
         
         triggerPositionCallback();
+        
+        // Log para debug
+        LOG_D("🛰️ GPS Fix: %.6f°%c, %.6f°%c | Sats: %d | HDOP: %.1f", 
+              abs(nmeaData.latitude), (nmeaData.latitude >= 0) ? 'N' : 'S',
+              abs(nmeaData.longitude), (nmeaData.longitude >= 0) ? 'E' : 'W',
+              nmeaData.satellites, nmeaData.hdop);
     }
     
     return true;

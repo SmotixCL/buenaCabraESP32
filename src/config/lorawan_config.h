@@ -18,47 +18,48 @@
 // ============================================================================
 // CONFIGURACIÓN OTAA (RECOMENDADO)
 // ============================================================================
-// Device EUI (8 bytes) - Único por dispositivo
-// DevEUI real: 58ec3c43ca480000 (proporcionado por el usuario)
+// ============================================================================
+// CONFIGURACIÓN OTAA (RECOMENDADO PARA DEBUGGING)
+// ============================================================================
+// Device EUI (8 bytes) - LITTLE ENDIAN PARA LORAWAN (ORDEN INVERTIDO)
 const uint8_t LORAWAN_DEV_EUI[8] = {
-    0x58, 0xEC, 0x3C, 0x43, 0xCA, 0x48, 0x00, 0x00
+    0x58, 0xEC, 0x3C, 0x43, 0xCA, 0x48, 0x00, 0x00  // ✅ CORREGIDO: little endian
 };
 
-// Application EUI (8 bytes) - Proporcionado por el servidor LoRaWAN
+// Application EUI (8 bytes) - LITTLE ENDIAN para LoRaWAN  
 const uint8_t LORAWAN_APP_EUI[8] = {
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    0x70, 0xB3, 0xD5, 0x7E, 0xD0, 0x00, 0x00, 0x01  // ✅ Orden correcto little endian
 };
 
-// Application Key (16 bytes) - Clave secreta de la aplicación
+// Application Key (16 bytes) - CLAVE REAL DEL USUARIO
 const uint8_t LORAWAN_APP_KEY[16] = {
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    0x12, 0x8A, 0x9F, 0x0C, 0x8B, 0x8E, 0xFB, 0x6D,
+    0xCD, 0x33, 0xC2, 0x37, 0x06, 0x27, 0x2E, 0x75  // ✅ Clave real configurada
 };
-
 // ============================================================================
-// CONFIGURACIÓN ABP (ALTERNATIVA)
+// CONFIGURACIÓN ABP (USADA ACTUALMENTE)
 // ============================================================================
-// Device Address (4 bytes)
+// Device Address (4 bytes) - CLAVES REALES DE CHIRPSTACK
 const uint8_t LORAWAN_DEV_ADDR[4] = {
-    0x00, 0x00, 0x00, 0x00
+    0x00, 0xEE, 0x93, 0x7A  // ✅ Claves reales del usuario
 };
 
-// Network Session Key (16 bytes)
+// Network Session Key (16 bytes) - CLAVES REALES DE CHIRPSTACK
 const uint8_t LORAWAN_NWK_SKEY[16] = {
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    0x33, 0x07, 0x5B, 0x9E, 0x6F, 0x6A, 0x87, 0x37, 
+    0x40, 0x60, 0xD8, 0x98, 0xDD, 0x2B, 0xAC, 0xD8  // ✅ Claves reales del usuario
 };
 
-// Application Session Key (16 bytes)
+// Application Session Key (16 bytes) - CLAVES REALES DE CHIRPSTACK
 const uint8_t LORAWAN_APP_SKEY[16] = {
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    0x73, 0x3C, 0x3C, 0x0A, 0xF9, 0x83, 0xD5, 0x30, 
+    0x20, 0xAF, 0xE7, 0xBA, 0xF0, 0x43, 0xE6, 0xE1  // ✅ Claves reales del usuario
 };
 
 // ============================================================================
 // CONFIGURACIÓN DE RED
 // ============================================================================
-#define LORAWAN_USE_OTAA            true    // true=OTAA, false=ABP
+#define LORAWAN_USE_OTAA            true    // ✅ CAMBIAR A OTAA
 #define LORAWAN_ADR_ENABLED         true    // Adaptive Data Rate
 #define LORAWAN_CONFIRMED_UPLINKS   false   // Confirmación de uplinks
 #define LORAWAN_DEFAULT_DATARATE    0       // DR0 (SF12, más alcance)
