@@ -1,4 +1,9 @@
+// DisplayManager.h - Sistema de display mejorado con múltiples pantallas
+#ifndef DISPLAY_MANAGER_H
+#define DISPLAY_MANAGER_H
+
 #pragma once
+
 #include <Arduino.h>
 #include <SSD1306Wire.h>
 #include "config/pins.h"
@@ -6,22 +11,31 @@
 #include "core/Types.h"
 #include "core/Logger.h"
 
-/*
- * ============================================================================
- * DISPLAY MANAGER - GESTIÓN OLED Y PANTALLAS
- * ============================================================================
- */
+// ============================================================================
+// ENUMERACIONES Y TIPOS ADICIONALES
+// ============================================================================
+
+enum class GeofenceType {
+    CIRCLE = 0,
+    POLYGON = 1,
+    RECTANGLE = 2
+};
+
+// ============================================================================
+// CLASE DISPLAY MANAGER
+// ============================================================================
 
 class DisplayManager {
 public:
+    // Constructor
     DisplayManager(uint8_t address = OLED_ADDR, uint8_t sda = OLED_SDA, 
                    uint8_t scl = OLED_SCL, uint8_t rst = OLED_RST);
     
-    // Inicialización
+    // === INICIALIZACIÓN ===
     Result init();
     bool isInitialized() const;
     
-    // Control básico del display
+    // === CONTROL BÁSICO DEL DISPLAY ===
     void clear();
     void display();
     void setBrightness(uint8_t brightness);
@@ -29,96 +43,200 @@ public:
     void turnOff();
     bool isOn() const;
     
-    // Pantallas principales del sistema
+    // === PANTALLAS PRINCIPALES ===
+    
+    // Pantalla de inicio con animación de carga
+    void showBootScreen();
     void showSplashScreen();
+    
+    // Pantalla principal con información resumida
     void showMainScreen(const SystemStatus& status, const Position& position, 
                        const BatteryStatus& battery, AlertLevel alertLevel);
+    
+    // Pantalla de detalles GPS
+    void showGPSDetailScreen(const Position& position);
+    
+    // Pantalla de información de geocerca
+    void showGeofenceInfoScreen(const Geofence& geofence, float distance, bool inside);
+    
+    // Pantalla de estadísticas del sistema
+    void showSystemStatsScreen(const SystemStats& stats);
+    
+    // Pantallas de alerta y error
     void showAlertScreen(AlertLevel level, float distance);
     void showBatteryScreen(const BatteryStatus& battery);
-    void showGPSScreen(const Position& position);
-    void showStatsScreen(const SystemStats& stats);
     void showErrorScreen(const char* error);
     
-    // Elementos de UI reutilizables
+    // === NAVEGACIÓN ENTRE PANTALLAS ===
+    void nextScreen();
+    void previousScreen();
+    void setScreen(uint8_t screenIndex);
+    uint8_t getCurrentScreen() const;
+    
+    // === ACTUALIZACIÓN DE INFORMACIÓN ===
+    void updateCounters(uint16_t txCount, uint16_t rxCount);
+    void updateGeofenceInfo(const char* name, GeofenceType type, 
+                          float radius, float distance, bool inside);
+    void updateSystemStats(const SystemStats& stats);
+    
+    // === ELEMENTOS DE UI ===
+    
+    // Iconos y elementos gráficos
     void drawBatteryIcon(int16_t x, int16_t y, uint8_t percentage);
     void drawSignalIcon(int16_t x, int16_t y, uint8_t strength);
     void drawGPSIcon(int16_t x, int16_t y, bool connected);
     void drawAlertIcon(int16_t x, int16_t y, AlertLevel level);
+    void drawGeofenceIcon(int16_t x, int16_t y, GeofenceType type);
     
-    // Texto y elementos básicos
-    void drawCenteredText(const char* text, int16_t y, const uint8_t* font = nullptr);
-    void drawProgressBar(int16_t x, int16_t y, int16_t width, int16_t height, uint8_t percentage);
-    void drawStatusBar();
+    // Barras de progreso y gráficos
+    void drawProgressBar(int16_t x, int16_t y, int16_t width, 
+                        int16_t height, uint8_t percentage);
+    void drawGraph(int16_t x, int16_t y, int16_t width, int16_t height, 
+                  float* values, uint8_t count);
     
-    // Gestión automática de pantallas
+    // Texto y fuentes
+    void drawCenteredText(const char* text, int16_t y);
+    void drawScrollingText(const char* text, int16_t y, int16_t& offset);
+    void setSmallFont();
+    void setMediumFont();
+    void setLargeFont();
+    
+    // === ANIMACIONES ===
+    void showLoadingAnimation(uint8_t progress);
+    void showConnectingAnimation();
+    void showSearchingAnimation();
+    void flashScreen(uint8_t times = 3);
+    
+    // === GESTIÓN DE PANTALLA ===
+    
+    // Auto-apagado y gestión de energía
     void setAutoSleep(bool enabled, uint32_t timeoutMs = OLED_TIMEOUT_SLEEP);
     void updateLastActivity();
-    void update(); // Llamar desde loop principal
+    bool isAutoSleepEnabled() const;
     
-    // Configuración de pantallas
-    enum ScreenMode {
-        SCREEN_SPLASH,
-        SCREEN_MAIN,
-        SCREEN_ALERT,
-        SCREEN_BATTERY,
-        SCREEN_GPS,
-        SCREEN_STATS,
-        SCREEN_ERROR,
-        SCREEN_OFF
-    };
+    // Rotación automática de pantallas
+    void setAutoRotate(bool enabled, uint32_t intervalMs = 10000);
+    bool isAutoRotateEnabled() const;
     
-    void setScreenMode(ScreenMode mode);
-    ScreenMode getCurrentScreenMode() const;
+    // Manejo de botones
+    void handleButtonPress();
+    void handleLongPress();
+    
+    // === UTILIDADES ===
+    
+    // Actualización periódica (llamar desde loop)
+    void update();
+    
+    // Información de estado
+    void printStatus();
+    const char* getCurrentScreenName() const;
+    
+    // Test y debugging
+    void testAllScreens();
+    void showTestPattern();
+    
+    // === MODOS ESPECIALES ===
+    
+    // Modo de configuración
+    void showConfigScreen(const char* ssid, const char* ip);
+    
+    // Modo de actualización OTA
+    void showOTAProgress(uint8_t percentage);
+    
+    // Modo nocturno (brillo reducido)
+    void setNightMode(bool enabled);
     
 private:
-    SSD1306Wire oledDisplay;  // Renombrado para evitar conflicto con función display()
+    // === VARIABLES PRIVADAS ===
+    SSD1306Wire oledDisplay;
     uint8_t rstPin;
     bool initialized;
     bool displayOn;
     uint8_t currentBrightness;
+    bool nightMode;
     
     // Gestión de pantallas
+    enum ScreenMode {
+        SCREEN_SPLASH,
+        SCREEN_MAIN,
+        SCREEN_GPS_DETAIL,
+        SCREEN_GEOFENCE_INFO,
+        SCREEN_SYSTEM_STATS,
+        SCREEN_ALERT,
+        SCREEN_BATTERY,
+        SCREEN_ERROR,
+        SCREEN_CONFIG,
+        SCREEN_OFF
+    };
+    
     ScreenMode currentScreen;
     uint32_t lastActivity;
     bool autoSleepEnabled;
     uint32_t autoSleepTimeout;
+    bool autoRotateEnabled;
+    uint32_t autoRotateInterval;
+    uint32_t lastRotation;
     
-    // Datos actuales para refresh automático
+    // Cache de datos para actualización
     SystemStatus lastSystemStatus;
     Position lastPosition;
     BatteryStatus lastBattery;
     AlertLevel lastAlertLevel;
     float lastDistance;
     
-    // Métodos privados de inicialización
-    void setupDisplay();
-    void resetDisplay();
+    // === MÉTODOS PRIVADOS ===
     
-    // Métodos de dibujado interno
-    void drawHeader();
-    void drawTime(int16_t x, int16_t y);
-    void drawUptime(int16_t x, int16_t y, uint32_t uptime);
-    void formatCoordinate(char* buffer, double coordinate, bool isLatitude);
-    void drawWifiIcon(int16_t x, int16_t y, bool connected);
-    void drawLoRaIcon(int16_t x, int16_t y, bool connected);
+    // Helpers para dibujo
+    void drawStatusBar();
+    void drawNavigationHints();
+    void drawFrame(int16_t x, int16_t y, int16_t width, int16_t height);
     
-    // Animaciones simples
-    void drawLoadingAnimation(int16_t x, int16_t y);
-    void drawPulseAnimation(int16_t x, int16_t y, int16_t size);
+    // Formateo de texto
+    void formatCoordinate(char* buffer, double coord, bool isLatitude);
+    void formatTime(char* buffer, uint32_t seconds);
+    void formatDistance(char* buffer, float meters);
     
-    // Utilidades de texto
-    void drawTextWithBackground(int16_t x, int16_t y, const char* text, 
-                               bool inverted = false, const uint8_t* font = nullptr);
-    int16_t getTextWidth(const char* text, const uint8_t* font = nullptr);
+    // Validación
+    bool isValidPosition(const Position& pos) const;
+    const char* alertLevelToString(AlertLevel level) const;
     
-    // Gestión de auto-sleep
-    void checkAutoSleep();
-    
-    // Variables para animaciones
-    uint32_t animationCounter;
-    
-    // Fonts (definir los que se van a usar)
-    void setSmallFont();
-    void setMediumFont();
-    void setLargeFont();
+    // Animaciones internas
+    void drawLoadingDots(int16_t x, int16_t y);
+    void drawWaveAnimation(int16_t x, int16_t y, int16_t width);
 };
+
+// ============================================================================
+// FUNCIONES AUXILIARES GLOBALES
+// ============================================================================
+
+// Conversión de tipos a strings
+const char* geofenceTypeToString(GeofenceType type);
+const char* screenModeToString(uint8_t mode);
+
+// Formateo de unidades
+String formatBatteryVoltage(float voltage);
+String formatGPSCoordinate(double coord, bool isLatitude);
+String formatUptime(uint32_t milliseconds);
+
+// ============================================================================
+// MACROS DE CONFIGURACIÓN
+// ============================================================================
+
+// Configuración de fuentes
+#define FONT_SMALL      ArialMT_Plain_10
+#define FONT_MEDIUM     ArialMT_Plain_16  
+#define FONT_LARGE      ArialMT_Plain_24
+
+// Configuración de tiempos
+#define SCREEN_UPDATE_INTERVAL      1000    // 1 segundo
+#define ANIMATION_FRAME_DELAY       100     // 100ms por frame
+#define BUTTON_LONG_PRESS_TIME      1000    // 1 segundo para long press
+#define AUTO_ROTATE_DEFAULT_TIME    10000   // 10 segundos por pantalla
+
+// Configuración de elementos UI
+#define PROGRESS_BAR_HEIGHT         8
+#define BATTERY_ICON_WIDTH          22
+#define SIGNAL_BARS_COUNT           5
+#define GRAPH_MAX_POINTS            20
+
+#endif // DISPLAY_MANAGER_H

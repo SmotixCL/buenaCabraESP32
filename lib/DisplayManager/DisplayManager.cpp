@@ -110,21 +110,32 @@ void DisplayManager::showBootScreen() {
     
     clear();
     
-    // Título principal
+    // Variable estática para mantener el progreso entre llamadas
+    static uint8_t bootProgress = 0;
+    
+    // Título principal - centrado y más arriba
     display->setFont(ArialMT_Plain_16);
-    display->drawString(5, 0, "Collar V3.0");
+    display->drawString(20, 2, "Collar V3.0");
     
-    // Información del hardware
+    // Información del hardware - ajustado
     display->setFont(ArialMT_Plain_10);
-    display->drawString(0, 20, "ESP32-S3 + SX1262");
-    display->drawString(0, 32, "OLED V3 - Iniciado");
-    display->drawString(0, 44, "Sistema cargando...");
+    display->drawString(0, 22, "ESP32-S3 + SX1262");
+    display->drawString(0, 34, "OLED V3 - Iniciado");
     
-    // Barra de progreso simulada
-    drawProgressBar(0, 56, 128, 8, 100);
+    // Separar texto de carga del porcentaje para evitar sobreposición
+    display->drawString(0, 46, "Cargando:");
+    display->drawString(70, 46, String(bootProgress) + "%");
+    
+    // Barra de progreso en la parte inferior
+    drawProgressBar(0, 56, 128, 8, bootProgress);
     
     display();
-    delay(2000);
+    
+    // Incrementar progreso para animación (se llamará varias veces)
+    bootProgress += 20;
+    if (bootProgress > 100) bootProgress = 100;
+    
+    delay(500);  // Más corto para mejor animación
 }
 
 void DisplayManager::showMainScreen(const Position& pos, const BatteryStatus& battery, const HardwareStatus& hw) {
@@ -176,10 +187,16 @@ void DisplayManager::showMainScreen(const Position& pos, const BatteryStatus& ba
 void DisplayManager::showAlertScreen(AlertLevel level, float distance) {
     if (!isInitialized() || !enabled) return;
     
+    // Mantener la pantalla activa el tiempo mínimo necesario
+    static uint32_t alertStartTime = 0;
+    if (alertStartTime == 0) {
+        alertStartTime = millis();
+    }
+    
     clear();
     
-    // Título parpadeante para alertas críticas
-    bool blink = (level >= ALERT_DANGER && (millis() % 1000 < 500));
+    // Título parpadeante más lento para mejor visibilidad
+    bool blink = (level >= ALERT_DANGER && (millis() % 1500 < 750));  // Parpadeo más lento
     
     if (!blink || level < ALERT_DANGER) {
         display->setFont(ArialMT_Plain_16);
@@ -188,31 +205,40 @@ void DisplayManager::showAlertScreen(AlertLevel level, float distance) {
         switch (level) {
             case ALERT_CAUTION: alert_text = "PRECAUCION"; break;
             case ALERT_WARNING: alert_text = "ADVERTENCIA"; break;
-            case ALERT_DANGER: alert_text = "PELIGRO"; break;
-            case ALERT_EMERGENCY: alert_text = "EMERGENCIA"; break;
+            case ALERT_DANGER: alert_text = "!PELIGRO!"; break;  // Más notorio
+            case ALERT_EMERGENCY: alert_text = "!EMERGENCIA!"; break;  // Más notorio
             default: alert_text = "SEGURO"; break;
         }
         
-        // Centrar texto
-        int text_width = alert_text.length() * 10;  // Aproximación
+        // Centrar texto con mejor cálculo
+        int text_width = alert_text.length() * 9;  // Ajustado
         int x = (128 - text_width) / 2;
         display->drawString(x, 5, alert_text);
     }
     
-    // Información de distancia
+    // Información de distancia más grande y clara
     display->setFont(ArialMT_Plain_10);
-    display->drawString(0, 25, "Distancia al limite:");
-    display->drawString(0, 37, String(distance, 1) + " metros");
+    display->drawString(0, 25, "Distancia limite:");
+    
+    // Mostrar distancia con fuente más grande
+    display->setFont(ArialMT_Plain_16);
+    display->drawString(20, 35, String(distance, 1) + "m");
     
     // Barra de progreso visual de proximidad
+    display->setFont(ArialMT_Plain_10);
     int danger_percent = 100;
     if (distance > 0) {
-        danger_percent = constrain(100 - (distance * 10), 0, 100);
+        danger_percent = constrain(100 - (distance * 5), 0, 100);  // Más sensible
     }
     
-    drawProgressBar(0, 50, 128, 10, danger_percent);
+    drawProgressBar(0, 52, 128, 10, danger_percent);
     
     display();
+    
+    // Asegurar tiempo mínimo de visualización (3 segundos)
+    if (millis() - alertStartTime >= 3000) {
+        alertStartTime = 0;  // Reset para próxima alerta
+    }
 }
 
 void DisplayManager::showGPSScreen(const Position& pos) {

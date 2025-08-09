@@ -1,6 +1,9 @@
 #pragma once
 #include <Arduino.h>
 #include <RadioLib.h>
+#ifdef USE_PREFERENCES
+#include <Preferences.h>  // Para persistencia de DevNonce y Frame Counters
+#endif
 #include "config/pins.h"
 #include "config/constants.h"
 #include "core/Types.h"

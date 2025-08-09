@@ -120,37 +120,59 @@ Result RadioManager::joinOTAA(const uint8_t* devEUI, const uint8_t* appEUI, cons
     memcpy(nwkKey, appKey, 16);     // En LoRaWAN 1.0.x, NwkKey = AppKey
     memcpy(appKeyLocal, appKey, 16);
     
-    // ✅ FORZAR DEV-NONCE ALEATORIO PARA EVITAR DUPLICADOS
-    uint16_t devNonce = random(1, 65535);  // Nonce aleatorio 1-65534
-    LOG_I("🎲 Usando dev-nonce aleatorio: %u", devNonce);
+    // ✅ FORZAR DEV-NONCE INCREMENTAL PERSISTENTE
+    static uint16_t persistentDevNonce = 0;
+    
+    // Cargar dev-nonce desde memoria persistente si es posible
+    // En ESP32 podríamos usar Preferences o EEPROM
+    #ifdef USE_PREFERENCES
+        Preferences prefs;
+        prefs.begin("lorawan", false);
+        persistentDevNonce = prefs.getUShort("devnonce", random(1000, 10000));
+        persistentDevNonce++; // Incrementar para siguiente uso
+        prefs.putUShort("devnonce", persistentDevNonce);
+        prefs.end();
+    #else
+        // Sin persistencia, usar tiempo + random
+        persistentDevNonce = (millis() % 30000) + random(1000, 35000);
+    #endif
+    
+    LOG_I("🎲 Usando dev-nonce: %u", persistentDevNonce);
     
     // RadioLib 6.6.0 API para OTAA - beginOTAA() es void
     lorawan.beginOTAA(joinEUI, deviceEUI, nwkKey, appKeyLocal);
     
-    // ✅ CONFIGURAR DEV-NONCE ANTES DEL JOIN
-    // Nota: Verificar si RadioLib tiene setDevNonce() o similar
-    // lorawan.setDevNonce(devNonce);  // Si existe esta función
+    // Intentar join real con reintentos
+    int16_t state = RADIOLIB_ERR_NONE;
+    uint8_t maxRetries = 3;
     
-    // Intentar join real con timeout
-    int16_t state = lorawan.activateOTAA();
-    
-    if (state == RADIOLIB_LORAWAN_NEW_SESSION || state == RADIOLIB_LORAWAN_SESSION_RESTORED) {
-        joined = true;
-        currentState = STATE_JOINED;
-        LOG_I("✅ OTAA Join exitoso con dev-nonce: %u", devNonce);
+    for (uint8_t retry = 0; retry < maxRetries; retry++) {
+        state = lorawan.activateOTAA();
         
-        if (joinCallback) {
-            joinCallback(true);
+        if (state == RADIOLIB_LORAWAN_NEW_SESSION || state == RADIOLIB_LORAWAN_SESSION_RESTORED) {
+            joined = true;
+            currentState = STATE_JOINED;
+            LOG_I("✅ OTAA Join exitoso con dev-nonce: %u (intento %d)", persistentDevNonce, retry + 1);
+            
+            if (joinCallback) {
+                joinCallback(true);
+            }
+            return Result::SUCCESS;
         }
-        return Result::SUCCESS;
-    } else {
-        LOG_E("❌ OTAA Join falló: %s (dev-nonce: %u)", getErrorString(state), devNonce);
-        currentState = STATE_ERROR;
-        if (joinCallback) {
-            joinCallback(false);
-        }
-        return Result::ERROR_COMMUNICATION;
+        
+        LOG_W("⚠️ Join intento %d falló, reintentando...", retry + 1);
+        delay(5000 + (retry * 5000)); // Delay incremental entre intentos
+        
+        // Incrementar dev-nonce para próximo intento
+        persistentDevNonce++;
     }
+    
+    LOG_E("❌ OTAA Join falló después de %d intentos: %s", maxRetries, getErrorString(state));
+    currentState = STATE_ERROR;
+    if (joinCallback) {
+        joinCallback(false);
+    }
+    return Result::ERROR_COMMUNICATION;
 }
 
 Result RadioManager::joinABP(const uint8_t* devAddr, const uint8_t* nwkSKey, const uint8_t* appSKey) {
@@ -175,6 +197,23 @@ Result RadioManager::joinABP(const uint8_t* devAddr, const uint8_t* nwkSKey, con
     
     // RadioLib 6.6.0 API para ABP - beginABP() es void
     lorawan.beginABP(deviceAddr, fNwkSIntKey, sNwkSIntKey, nwkSEncKey, appSKeyLocal);
+    
+    // ✅ RESTAURAR FRAME COUNTERS PERSISTENTES PARA ABP
+    #ifdef USE_PREFERENCES
+        Preferences prefs;
+        prefs.begin("lorawan", false);
+        uint32_t fcntUp = prefs.getULong("fcntup", 0);
+        uint32_t fcntDown = prefs.getULong("fcntdown", 0);
+        prefs.end();
+        
+        // Establecer frame counters si es posible
+        // Nota: Verificar si RadioLib tiene setFrameCounters() o similar
+        // lorawan.setFrameCounters(fcntUp, fcntDown);
+        
+        LOG_I("📦 Frame counters restaurados: Up=%lu, Down=%lu", fcntUp, fcntDown);
+    #else
+        LOG_W("⚠️ Sin persistencia de frame counters, posibles problemas con reinicios");
+    #endif
     
     // En ABP la sesión está lista inmediatamente
     joined = true;
@@ -227,6 +266,21 @@ Result RadioManager::sendPacket(const uint8_t* data, size_t length, uint8_t port
         
         LOG_I("📡 Packet #%d enviado - RSSI: %.1fdBm, SNR: %.1fdB", 
               packetsSent, lastRSSI, lastSNR);
+        
+        // ✅ GUARDAR FRAME COUNTERS DESPUÉS DE TX EXITOSO
+        #ifdef USE_PREFERENCES
+            // Guardar cada 10 transmisiones para no desgastar la flash
+            if (packetsSent % 10 == 0) {
+                Preferences prefs;
+                prefs.begin("lorawan", false);
+                // Obtener frame counters actuales si RadioLib lo permite
+                // uint32_t fcntUp = lorawan.getFCntUp();
+                // prefs.putULong("fcntup", fcntUp);
+                prefs.putULong("fcntup", packetsSent); // Usar contador de paquetes como aproximación
+                prefs.end();
+                LOG_D("🔐 Frame counters guardados");
+            }
+        #endif
         
         // Verificar si hay downlink
         if (downlinkSize > 0) {

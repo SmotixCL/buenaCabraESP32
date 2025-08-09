@@ -1,20 +1,9 @@
-/*
- * ============================================================================
- * COLLAR LORAWAN HÍBRIDO - VERSIÓN CORREGIDA
- * ============================================================================
- * 
- * CORRECCIONES APLICADAS:
- * ✅ APIs reales de managers
- * ✅ Posición Chacay Bikepark (-37.34640277978371, -72.91495492379738)
- * ✅ AlertManager constructor corregido
- * ✅ Position struct sin lista de inicialización
- * ✅ GeofenceManager usando APIs reales
- * ✅ Callbacks con signaturas correctas
- */
+
 
 #include <Arduino.h>
 #include <Wire.h>
 #include <SSD1306Wire.h>
+#include <Preferences.h>  // Para persistencia de DevNonce y Frame Counters
 
 // Configuración del sistema
 #include "config/pins.h"
@@ -60,6 +49,40 @@ AlertManager alertManager(buzzerManager, displayManager);  // ✅ CORREGIDO
 // ============================================================================
 // VARIABLES GLOBALES
 // ============================================================================
+
+#define BUTTON_PRG_PIN  0  // GPIO0 es el botón PRG en Heltec V3
+
+// Estado del botón
+struct ButtonState {
+    bool lastState = HIGH;
+    bool currentState = HIGH;
+    uint32_t lastDebounceTime = 0;
+    const uint32_t debounceDelay = 50;
+    uint32_t pressCount = 0;
+} buttonState;
+
+// Estado de las pantallas
+struct ScreenManager {
+    uint8_t currentScreen = 0;
+    uint32_t lastScreenUpdate = 0;
+    const uint32_t screenUpdateInterval = 1000; // Actualizar cada 1s
+    
+    // Para rotación automática (opcional)
+    bool autoRotate = false;
+    uint32_t autoRotateInterval = 10000; // 10s por pantalla
+    uint32_t lastAutoRotate = 0;
+} screenManager;
+
+// Información de geocerca actual
+struct GeofenceInfo {
+    String name = "Bosques Chacay";
+    GeofenceType type = GeofenceType::CIRCLE;
+    float radius = 100.0;
+    float currentDistance = 0;
+    bool isInside = true;
+    double centerLat = -37.34640277978371;
+    double centerLng = -72.91495492379738;
+} currentGeofence;
 
 // Posición por defecto (sin lista de inicialización)
 Position currentPosition;  // ✅ CORREGIDO
@@ -265,6 +288,143 @@ void checkGeofence() {
 // SETUP PRINCIPAL
 // ============================================================================
 
+// ============================================================================
+// FUNCIÓN DE INICIALIZACIÓN DEL BOTÓN
+// ============================================================================
+
+void initButton() {
+    pinMode(BUTTON_PRG_PIN, INPUT_PULLUP);
+    LOG_I("🔘 Botón PRG configurado en pin %d", BUTTON_PRG_PIN);
+}
+
+// ============================================================================
+// FUNCIÓN PARA LEER EL BOTÓN CON DEBOUNCE
+// ============================================================================
+
+bool readButton() {
+    int reading = digitalRead(BUTTON_PRG_PIN);
+    
+    if (reading != buttonState.lastState) {
+        buttonState.lastDebounceTime = millis();
+    }
+    
+    if ((millis() - buttonState.lastDebounceTime) > buttonState.debounceDelay) {
+        if (reading != buttonState.currentState) {
+            buttonState.currentState = reading;
+            
+            // Detectar presión (flanco descendente)
+            if (buttonState.currentState == LOW) {
+                buttonState.pressCount++;
+                return true;
+            }
+        }
+    }
+    
+    buttonState.lastState = reading;
+    return false;
+}
+
+// ============================================================================
+// FUNCIÓN PARA MANEJAR CAMBIO DE PANTALLA
+// ============================================================================
+
+void handleScreenChange() {
+    screenManager.currentScreen = (screenManager.currentScreen + 1) % 4;
+    screenManager.lastAutoRotate = millis(); // Reset auto-rotación
+    
+    // Feedback visual y sonoro
+    buzzerManager.playTone(1000, 50, 50); // Beep corto
+    
+    // Log del cambio
+    const char* screenNames[] = {
+        "Principal",
+        "GPS Detalle",
+        "Geocerca",
+        "Estadísticas"
+    };
+    
+    LOG_I("📺 Cambiado a pantalla: %s", screenNames[screenManager.currentScreen]);
+}
+
+// ============================================================================
+// FUNCIÓN PARA ACTUALIZAR PANTALLA SEGÚN MODO
+// ============================================================================
+
+void updateDisplay() {
+    // No actualizar muy frecuentemente
+    if (millis() - screenManager.lastScreenUpdate < screenManager.screenUpdateInterval) {
+        return;
+    }
+    
+    screenManager.lastScreenUpdate = millis();
+    
+    // Actualizar información de geocerca
+    if (geofenceManager.isInitialized()) {
+        currentGeofence.currentDistance = geofenceManager.getDistance(currentPosition);
+        currentGeofence.isInside = geofenceManager.isInsideGeofence(currentPosition);
+        
+        // Actualizar información en el DisplayManager
+        displayManager.updateGeofenceInfo(
+            currentGeofence.name.c_str(),
+            currentGeofence.type,
+            currentGeofence.radius,
+            currentGeofence.currentDistance,
+            currentGeofence.isInside
+        );
+    }
+    
+    // Actualizar contadores
+    displayManager.updateCounters(packetCounter, 0); // rxCounter si lo tienes
+    
+    // Mostrar pantalla según el modo actual
+    switch (screenManager.currentScreen) {
+        case 0: // Pantalla principal
+            displayManager.showMainScreen(systemStatus, currentPosition, 
+                                         batteryStatus, currentAlert);
+            break;
+            
+        case 1: // Detalles GPS
+            displayManager.showGPSDetailScreen(currentPosition);
+            break;
+            
+        case 2: // Información de Geocerca
+            {
+                Geofence gf;
+                gf.centerLat = currentGeofence.centerLat;
+                gf.centerLng = currentGeofence.centerLng;
+                gf.radius = currentGeofence.radius;
+                strncpy(gf.name, currentGeofence.name.c_str(), 15);
+                gf.name[15] = '\0';
+                gf.active = true;
+                
+                displayManager.showGeofenceInfoScreen(gf, 
+                    currentGeofence.currentDistance, 
+                    currentGeofence.isInside);
+            }
+            break;
+            
+        case 3: // Estadísticas del sistema
+            {
+                SystemStats stats;
+                stats.totalUptime = millis();
+                stats.totalPacketsSent = packetCounter;
+                stats.totalPacketsReceived = 0;
+                stats.packetsLost = 0;
+                stats.geofenceViolations = 0;
+                stats.lowBatteryEvents = 0;
+                stats.alertsTriggered = 0;
+                stats.averageBatteryVoltage = batteryStatus.voltage;
+                
+                displayManager.showSystemStatsScreen(stats);
+            }
+            break;
+            
+        default:
+            screenManager.currentScreen = 0;
+            break;
+    }
+}
+
 void setup() {
     // Configuración básica
     pinMode(VEXT_ENABLE, OUTPUT);
@@ -391,6 +551,13 @@ void setup() {
         ledSignal(3); // Error
     }
     
+    // Inicializar botón PRG
+    initButton();
+    
+    // Configurar pantalla inicial
+    screenManager.currentScreen = 0;
+    screenManager.autoRotate = false; // Desactivado por defecto
+    
     // Sistema listo
     systemReady = true;
     ledSignal(4); // Setup completo
@@ -412,6 +579,11 @@ void setup() {
 
 void loop() {
     uint32_t currentTime = millis();
+    
+    // === MANEJO DEL BOTÓN PRG ===
+    if (readButton()) {
+        handleScreenChange();
+    }
     
     // Actualizar GPS cada 15 segundos
     if (currentTime - lastGPSCheck > STABLE_GPS_INTERVAL) {
@@ -454,21 +626,41 @@ void loop() {
         lastBatteryCheck = currentTime;
     }
     
-    // Actualizar display cada 15 segundos
-    if (currentTime - lastDisplayUpdate > STABLE_DISPLAY_INTERVAL) {
-        if (displayManager.isInitialized()) {
-            systemStatus.buzzerInitialized = true;
-            systemStatus.displayInitialized = displayManager.isInitialized();
-            systemStatus.gpsInitialized = gpsManager.isInitialized();
-            systemStatus.radioInitialized = radioManager.isInitialized();
-            systemStatus.uptime = currentTime / 1000;
-            systemStatus.freeHeap = ESP.getFreeHeap();
-            systemStatus.currentState = (gpsHasFix ? 2 : 0) + (loraJoined ? 1 : 0);
-            
-            displayManager.showMainScreen(systemStatus, currentPosition, batteryStatus, currentAlert);
+    // === ACTUALIZACIÓN DE PANTALLA ===
+    // Actualizar información del sistema
+    systemStatus.buzzerInitialized = true;
+    systemStatus.displayInitialized = displayManager.isInitialized();
+    systemStatus.gpsInitialized = gpsManager.isInitialized();
+    systemStatus.radioInitialized = radioManager.isInitialized();
+    systemStatus.uptime = millis();
+    systemStatus.freeHeap = ESP.getFreeHeap();
+    systemStatus.currentState = (gpsHasFix ? 2 : 0) + (loraJoined ? 1 : 0);
+    
+    // Si hay alerta activa, mostrar pantalla de alerta
+    if (currentAlert != AlertLevel::SAFE) {
+        // Mostrar pantalla de alerta con prioridad
+        displayManager.showAlertScreen(currentAlert, currentGeofence.currentDistance);
+        
+        // Después de 5 segundos, permitir navegación normal
+        static uint32_t alertShowTime = 0;
+        if (alertShowTime == 0) {
+            alertShowTime = millis();
         }
         
-        lastDisplayUpdate = currentTime;
+        if (millis() - alertShowTime > 5000) {
+            // Después de 5 segundos, permitir cambiar pantallas
+            updateDisplay();
+        }
+        
+        // Resetear tiempo si la alerta cambia
+        static AlertLevel lastAlert = AlertLevel::SAFE;
+        if (currentAlert != lastAlert) {
+            alertShowTime = millis();
+            lastAlert = currentAlert;
+        }
+    } else {
+        // Sin alertas, navegación normal
+        updateDisplay();
     }
     
     // ✅ REINTENTAR JOIN SI NO ESTÁ CONECTADO

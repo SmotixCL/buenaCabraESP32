@@ -414,9 +414,27 @@ void AlertManager::executeAlert() {
 }
 
 void AlertManager::updateDisplay() {
-    // Solo actualizar si el display no está mostrando alerta
-    if (displayManager.getCurrentScreenMode() != DisplayManager::SCREEN_ALERT) {
+    // Actualizar display con la alerta
+    static uint32_t lastAlertDisplayTime = 0;
+    static AlertLevel lastDisplayedLevel = AlertLevel::SAFE;
+    static uint32_t alertDisplayStartTime = 0;
+    
+    // Si es una nueva alerta, resetear el tiempo de inicio
+    if (currentLevel != lastDisplayedLevel) {
+        alertDisplayStartTime = millis();
+        lastDisplayedLevel = currentLevel;
+    }
+    
+    // Mantener la pantalla de alerta visible por mínimo 3 segundos
+    uint32_t minDisplayTime = 3000;  // 3 segundos mínimo
+    uint32_t elapsedTime = millis() - alertDisplayStartTime;
+    
+    // Mostrar alerta nueva o actualizar cada 250ms (más frecuente para mejor visibilidad)
+    if (currentLevel != AlertLevel::SAFE && 
+        (elapsedTime < minDisplayTime || millis() - lastAlertDisplayTime > 250)) {
+        
         displayManager.showAlertScreen(currentLevel, currentDistance);
+        lastAlertDisplayTime = millis();
     }
 }
 

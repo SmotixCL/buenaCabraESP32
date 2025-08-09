@@ -1,65 +1,59 @@
+// DisplayManager.cpp - Sistema de pantallas mejorado con navegación y mejor UI
 #include "DisplayManager.h"
-#include <OLEDDisplayFonts.h>
-#include <Wire.h>
+#include <Arduino.h>
 
-// ============================================================================
-// CONSTRUCTOR E INICIALIZACIÓN
-// ============================================================================
+// Variables para navegación entre pantallas
+enum ScreenType {
+    SCREEN_MAIN = 0,
+    SCREEN_GPS_DETAIL,
+    SCREEN_GEOFENCE_INFO,
+    SCREEN_SYSTEM_STATS,
+    SCREEN_COUNT
+};
 
+// Estado de la pantalla
+struct DisplayState {
+    ScreenType currentScreen = SCREEN_MAIN;
+    uint32_t lastScreenChange = 0;
+    uint32_t lastUpdate = 0;
+    bool isLoading = false;
+    uint8_t loadingProgress = 0;
+    
+    // Contadores del sistema
+    uint32_t uptimeMinutes = 0;
+    uint16_t txCounter = 0;
+    uint16_t rxCounter = 0;
+    
+    // Info de geocerca
+    String geofenceName = "Sin configurar";
+    String geofenceType = "N/A";
+    float geofenceRadius = 0;
+    float distanceToCenter = 0;
+    bool insideGeofence = true;
+} displayState;
+
+// Constructor
 DisplayManager::DisplayManager(uint8_t address, uint8_t sda, uint8_t scl, uint8_t rst) :
     oledDisplay(address, sda, scl),
     rstPin(rst),
     initialized(false),
-    displayOn(false),
-    currentBrightness(255),
-    currentScreen(SCREEN_OFF),
-    lastActivity(0),
-    autoSleepEnabled(true),
-    autoSleepTimeout(OLED_TIMEOUT_SLEEP),
-    lastAlertLevel(AlertLevel::SAFE),
-    lastDistance(0.0f),
-    animationCounter(0)
-{
-    updateLastActivity();
+    displayOn(true),
+    currentBrightness(128) {
 }
 
+// Inicialización mejorada con pantalla de carga
 Result DisplayManager::init() {
-    if (initialized) {
-        return Result::SUCCESS;
-    }
+    if (initialized) return Result::SUCCESS;
     
     LOG_I("📺 Inicializando Display Manager...");
     
-    // CRÍTICO: Activar VEXT para alimentar OLED y periféricos
-    pinMode(VEXT_ENABLE, OUTPUT);
-    digitalWrite(VEXT_ENABLE, VEXT_ON_VALUE);
-    delay(100); // Tiempo para estabilizar alimentación
-    
-    // Configurar I2C
-    Wire.begin(OLED_SDA, OLED_SCL);
-    Wire.setClock(I2C_FREQUENCY);
-    
-    // Reset del display
-    resetDisplay();
-    
-    // Intentar inicializar display con timeout
-    LOG_D("📺 Intentando conectar con OLED en dirección 0x%02X...", OLED_ADDR);
-    
-    bool displayFound = false;
-    for (int attempt = 0; attempt < 3 && !displayFound; attempt++) {
-        Wire.beginTransmission(OLED_ADDR);
-        if (Wire.endTransmission() == 0) {
-            displayFound = true;
-            LOG_D("📺 OLED detectado en intento %d", attempt + 1);
-        } else {
-            LOG_W("📺 OLED no detectado en intento %d, reintentando...", attempt + 1);
-            delay(100);
-        }
-    }
-    
-    if (!displayFound) {
-        LOG_E("❌ OLED no encontrado en dirección 0x%02X", OLED_ADDR);
-        return Result::ERROR_HARDWARE;
+    // Reset físico del display
+    if (rstPin != 255) {
+        pinMode(rstPin, OUTPUT);
+        digitalWrite(rstPin, LOW);
+        delay(50);
+        digitalWrite(rstPin, HIGH);
+        delay(50);
     }
     
     // Inicializar display
@@ -68,23 +62,478 @@ Result DisplayManager::init() {
         return Result::ERROR_HARDWARE;
     }
     
-    setupDisplay();
+    oledDisplay.flipScreenVertically();
+    oledDisplay.setContrast(255);
+    
+    // Mostrar pantalla de carga mejorada
+    showBootScreen();
     
     initialized = true;
     displayOn = true;
     
-    LOG_INIT("Display Manager", true);
-    
+    LOG_I("✅ Display Manager inicializado");
     return Result::SUCCESS;
 }
 
-bool DisplayManager::isInitialized() const {
-    return initialized;
+// Pantalla de inicio mejorada con animación de carga
+void DisplayManager::showBootScreen() {
+    clear();
+    
+    // Título
+    oledDisplay.setFont(ArialMT_Plain_16);
+    oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
+    oledDisplay.drawString(64, 0, "COLLAR V3");
+    
+    // Versión
+    oledDisplay.setFont(ArialMT_Plain_10);
+    oledDisplay.drawString(64, 18, "Geofencing System");
+    
+    // Barra de progreso inicial (más abajo para no interferir)
+    drawProgressBar(14, 35, 100, 8, 0);
+    
+    // Mensaje de estado (debajo de la barra)
+    oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
+    oledDisplay.drawString(64, 48, "Iniciando...");
+    
+    display();
+    delay(1000);
+    
+    // Animación de carga progresiva
+    const char* loadingSteps[] = {
+        "Verificando HW...",
+        "Iniciando GPS...",
+        "Config. LoRaWAN...",
+        "Cargando geocerca...",
+        "Sistema listo!"
+    };
+    
+    for (int i = 0; i < 5; i++) {
+        clear();
+        
+        // Mantener título
+        oledDisplay.setFont(ArialMT_Plain_16);
+        oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
+        oledDisplay.drawString(64, 0, "COLLAR V3");
+        
+        // Subtítulo
+        oledDisplay.setFont(ArialMT_Plain_10);
+        oledDisplay.drawString(64, 18, "Geofencing System");
+        
+        // Barra de progreso
+        uint8_t progress = (i + 1) * 20;
+        drawProgressBar(14, 35, 100, 8, progress);
+        
+        // Mostrar paso actual (debajo de la barra)
+        oledDisplay.setFont(ArialMT_Plain_10);
+        oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
+        oledDisplay.drawString(64, 48, loadingSteps[i]);
+        
+        // Mostrar porcentaje al lado de la barra
+        char percStr[8];
+        snprintf(percStr, sizeof(percStr), "%d%%", progress);
+        oledDisplay.setTextAlignment(TEXT_ALIGN_RIGHT);
+        oledDisplay.drawString(128, 35, percStr);
+        
+        display();
+        delay(600);
+    }
+    
+    delay(800);
+}
+
+// Pantalla principal mejorada sin superposición
+void DisplayManager::showMainScreen(const SystemStatus& status, const Position& position, 
+                                   const BatteryStatus& battery, AlertLevel alertLevel) {
+    if (!initialized) return;
+    
+    clear();
+    
+    // Línea 1: Estado y batería
+    oledDisplay.setFont(ArialMT_Plain_10);
+    oledDisplay.setTextAlignment(TEXT_ALIGN_LEFT);
+    
+    // Estado del sistema con icono
+    const char* statusIcon = status.radioInitialized ? "📡" : "⚠";
+    oledDisplay.drawString(0, 0, statusIcon);
+    
+    // Batería en la derecha
+    oledDisplay.setTextAlignment(TEXT_ALIGN_RIGHT);
+    char batteryStr[16];
+    snprintf(batteryStr, sizeof(batteryStr), "%d%% %.1fV", battery.percentage, battery.voltage);
+    oledDisplay.drawString(128, 0, batteryStr);
+    
+    // Línea 2-3: Posición GPS (formato decimal simplificado)
+    oledDisplay.setTextAlignment(TEXT_ALIGN_LEFT);
+    if (isValidPosition(position)) {
+        char latStr[20], lngStr[20];
+        // Formato simplificado sin grados
+        snprintf(latStr, sizeof(latStr), "LAT: %.5f", position.latitude);
+        snprintf(lngStr, sizeof(lngStr), "LNG: %.5f", position.longitude);
+        
+        oledDisplay.drawString(0, 12, latStr);
+        oledDisplay.drawString(0, 24, lngStr);
+        
+        // Indicador de satelites
+        char satStr[10];
+        snprintf(satStr, sizeof(satStr), "SAT:%d", position.satellites);
+        oledDisplay.setTextAlignment(TEXT_ALIGN_RIGHT);
+        oledDisplay.drawString(128, 12, satStr);
+    } else {
+        oledDisplay.drawString(0, 12, "GPS: Buscando...");
+        // Animación de puntos
+        int dots = (millis() / 500) % 4;
+        String dotsStr = "";
+        for (int i = 0; i < dots; i++) dotsStr += ".";
+        oledDisplay.drawString(0, 24, dotsStr.c_str());
+    }
+    
+    // Línea 4: Estado de alerta/geocerca
+    oledDisplay.setTextAlignment(TEXT_ALIGN_LEFT);
+    if (alertLevel != AlertLevel::SAFE) {
+        // Parpadeo para alertas
+        if ((millis() / 500) % 2 == 0 || alertLevel < AlertLevel::DANGER) {
+            const char* alertText = alertLevelToString(alertLevel);
+            oledDisplay.drawString(0, 36, "ALERTA:");
+            oledDisplay.drawString(45, 36, alertText);
+        }
+    } else {
+        oledDisplay.drawString(0, 36, "Estado: SEGURO");
+    }
+    
+    // Línea 5: Contadores actualizados correctamente
+    char statsStr[32];
+    displayState.uptimeMinutes = status.uptime / 60000; // Convertir ms a minutos
+    snprintf(statsStr, sizeof(statsStr), "UP:%02lu TX:%d RX:%d", 
+             displayState.uptimeMinutes, displayState.txCounter, displayState.rxCounter);
+    oledDisplay.setFont(ArialMT_Plain_10);
+    oledDisplay.drawString(0, 48, statsStr);
+    
+    // Indicador de pantalla actual (pequeño en esquina)
+    oledDisplay.setTextAlignment(TEXT_ALIGN_RIGHT);
+    oledDisplay.drawString(128, 48, "1/4");
+    
+    display();
+    currentScreen = SCREEN_MAIN;
+}
+
+// Nueva pantalla: Detalles GPS
+void DisplayManager::showGPSDetailScreen(const Position& position) {
+    if (!initialized) return;
+    
+    clear();
+    
+    // Título
+    oledDisplay.setFont(ArialMT_Plain_10);
+    oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
+    oledDisplay.drawString(64, 0, "=== DETALLES GPS ===");
+    
+    oledDisplay.setTextAlignment(TEXT_ALIGN_LEFT);
+    
+    if (isValidPosition(position)) {
+        char line[32];
+        
+        // Coordenadas completas
+        snprintf(line, sizeof(line), "LAT: %.6f", position.latitude);
+        oledDisplay.drawString(0, 12, line);
+        
+        snprintf(line, sizeof(line), "LNG: %.6f", position.longitude);
+        oledDisplay.drawString(0, 22, line);
+        
+        // Altitud y precisión
+        snprintf(line, sizeof(line), "ALT: %.1f m", position.altitude);
+        oledDisplay.drawString(0, 32, line);
+        
+        snprintf(line, sizeof(line), "PREC: %.1f m", position.accuracy);
+        oledDisplay.drawString(0, 42, line);
+        
+        // Satélites y precisión
+        snprintf(line, sizeof(line), "SAT: %d  PREC: %.1fm", 
+                position.satellites, position.accuracy);
+        oledDisplay.drawString(0, 52, line);
+    } else {
+        oledDisplay.drawString(0, 25, "Sin señal GPS");
+        oledDisplay.drawString(0, 35, "Verificar antena");
+    }
+    
+    // Indicador de pantalla
+    oledDisplay.setTextAlignment(TEXT_ALIGN_RIGHT);
+    oledDisplay.drawString(128, 52, "2/4");
+    
+    display();
+}
+
+// Nueva pantalla: Información de Geocerca
+void DisplayManager::showGeofenceInfoScreen(const Geofence& geofence, float distance, bool inside) {
+    if (!initialized) return;
+    
+    clear();
+    
+    // Título
+    oledDisplay.setFont(ArialMT_Plain_10);
+    oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
+    oledDisplay.drawString(64, 0, "=== GEOCERCA ===");
+    
+    oledDisplay.setTextAlignment(TEXT_ALIGN_LEFT);
+    
+    // Nombre de la geocerca
+    char line[32];
+    snprintf(line, sizeof(line), "Nombre: %s", geofence.name);
+    oledDisplay.drawString(0, 12, line);
+    
+    // Tipo de geocerca (siempre círculo por ahora)
+    const char* typeIcon = "○";
+    const char* typeText = "Círculo";
+    snprintf(line, sizeof(line), "Tipo: %s %s", typeIcon, typeText);
+    oledDisplay.drawString(0, 22, line);
+    
+    // Radio
+    snprintf(line, sizeof(line), "Radio: %.0f m", geofence.radius);
+    oledDisplay.drawString(0, 32, line);
+    
+    // Distancia al centro/borde
+    snprintf(line, sizeof(line), "Dist: %.1f m", distance);
+    oledDisplay.drawString(0, 42, line);
+    
+    // Estado actual con indicador visual
+    oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
+    if (inside) {
+        oledDisplay.drawString(64, 52, "✓ DENTRO");
+    } else {
+        // Parpadeo si está fuera
+        if ((millis() / 500) % 2 == 0) {
+            oledDisplay.drawString(64, 52, "✗ FUERA");
+        }
+    }
+    
+    // Indicador de pantalla
+    oledDisplay.setTextAlignment(TEXT_ALIGN_RIGHT);
+    oledDisplay.drawString(128, 52, "3/4");
+    
+    display();
+}
+
+// Nueva pantalla: Estadísticas del sistema
+void DisplayManager::showSystemStatsScreen(const SystemStats& stats) {
+    if (!initialized) return;
+    
+    clear();
+    
+    // Título
+    oledDisplay.setFont(ArialMT_Plain_10);
+    oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
+    oledDisplay.drawString(64, 0, "=== ESTADÍSTICAS ===");
+    
+    oledDisplay.setTextAlignment(TEXT_ALIGN_LEFT);
+    
+    char line[32];
+    
+    // Paquetes enviados/recibidos
+    snprintf(line, sizeof(line), "TX Total: %lu", stats.totalPacketsSent);
+    oledDisplay.drawString(0, 12, line);
+    
+    snprintf(line, sizeof(line), "RX Total: %lu", stats.totalPacketsReceived);
+    oledDisplay.drawString(0, 22, line);
+    
+    // Tasa de éxito
+    float successRate = (stats.totalPacketsSent > 0) ? 
+        (100.0f * (stats.totalPacketsSent - stats.packetsLost) / stats.totalPacketsSent) : 0;
+    snprintf(line, sizeof(line), "Éxito: %.1f%%", successRate);
+    oledDisplay.drawString(0, 32, line);
+    
+    // Violaciones de geocerca
+    snprintf(line, sizeof(line), "Violaciones: %lu", stats.geofenceViolations);
+    oledDisplay.drawString(0, 42, line);
+    
+    // Tiempo de operación
+    uint32_t hours = stats.totalUptime / 3600000;
+    uint32_t minutes = (stats.totalUptime % 3600000) / 60000;
+    snprintf(line, sizeof(line), "Tiempo: %luh %lum", hours, minutes);
+    oledDisplay.drawString(0, 52, line);
+    
+    // Indicador de pantalla
+    oledDisplay.setTextAlignment(TEXT_ALIGN_RIGHT);
+    oledDisplay.drawString(128, 52, "4/4");
+    
+    display();
+}
+
+// Navegación entre pantallas con botón PRG
+void DisplayManager::nextScreen() {
+    displayState.currentScreen = (ScreenType)((displayState.currentScreen + 1) % SCREEN_COUNT);
+    displayState.lastScreenChange = millis();
+    
+    // Feedback visual
+    clear();
+    oledDisplay.setFont(ArialMT_Plain_10);
+    oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
+    
+    const char* screenNames[] = {
+        "Principal",
+        "GPS Detalle", 
+        "Geocerca",
+        "Estadísticas"
+    };
+    
+    oledDisplay.drawString(64, 25, "Cambiando a:");
+    oledDisplay.drawString(64, 35, screenNames[displayState.currentScreen]);
+    display();
+    delay(300);
+}
+
+// Actualizar pantalla según el modo actual
+void DisplayManager::update() {
+    if (!initialized || !displayOn) return;
+    
+    // Auto-apagado después de timeout
+    if (autoSleepEnabled && (millis() - lastActivity > autoSleepTimeout)) {
+        turnOff();
+        return;
+    }
+    
+    // No actualizar muy frecuentemente
+    if (millis() - displayState.lastUpdate < 1000) return;
+    displayState.lastUpdate = millis();
+    
+    // Actualizar según pantalla actual
+    // (Este método debe ser llamado desde el loop principal con los datos actuales)
+}
+
+// Actualizar contadores
+void DisplayManager::updateCounters(uint16_t txCount, uint16_t rxCount) {
+    displayState.txCounter = txCount;
+    displayState.rxCounter = rxCount;
+}
+
+// Actualizar información de geocerca
+void DisplayManager::updateGeofenceInfo(const char* name, GeofenceType type, 
+                                       float radius, float distance, bool inside) {
+    displayState.geofenceName = String(name);
+    displayState.geofenceType = (type == GeofenceType::CIRCLE) ? "Círculo" : "Polígono";
+    displayState.geofenceRadius = radius;
+    displayState.distanceToCenter = distance;
+    displayState.insideGeofence = inside;
+}
+
+// Barra de progreso mejorada
+void DisplayManager::drawProgressBar(int16_t x, int16_t y, int16_t width, 
+                                    int16_t height, uint8_t percentage) {
+    // Marco de la barra
+    oledDisplay.drawRect(x, y, width, height);
+    
+    // Relleno según porcentaje
+    if (percentage > 0) {
+        int16_t fillWidth = (width - 2) * percentage / 100;
+        oledDisplay.fillRect(x + 1, y + 1, fillWidth, height - 2);
+    }
+    
+    // Texto del porcentaje (opcional, si hay espacio)
+    if (width > 30) {
+        char percStr[5];
+        snprintf(percStr, sizeof(percStr), "%d%%", percentage);
+        oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
+        oledDisplay.drawString(x + width/2, y + height + 2, percStr);
+    }
+}
+
+// Funciones auxiliares mejoradas
+void DisplayManager::drawBatteryIcon(int16_t x, int16_t y, uint8_t percentage) {
+    // Cuerpo de la batería
+    oledDisplay.drawRect(x, y, 20, 10);
+    // Terminal positivo
+    oledDisplay.drawRect(x + 20, y + 3, 2, 4);
+    
+    // Relleno según porcentaje
+    int16_t fillWidth = 18 * percentage / 100;
+    if (fillWidth > 0) {
+        oledDisplay.fillRect(x + 1, y + 1, fillWidth, 8);
+    }
+    
+    // Indicador de carga baja
+    if (percentage < 20) {
+        // Parpadeo si está muy baja
+        if ((millis() / 500) % 2 == 0) {
+            oledDisplay.drawString(x + 25, y, "!");
+        }
+    }
+}
+
+// Manejo del botón PRG para cambiar pantallas
+void DisplayManager::handleButtonPress() {
+    static uint32_t lastButtonPress = 0;
+    const uint32_t debounceTime = 200; // ms
+    
+    if (millis() - lastButtonPress > debounceTime) {
+        nextScreen();
+        lastButtonPress = millis();
+        updateLastActivity();
+    }
+}
+
+// Obtener pantalla actual
+uint8_t DisplayManager::getCurrentScreen() const {
+    return static_cast<uint8_t>(currentScreen);
+}
+
+// Obtener nombre de pantalla actual
+const char* DisplayManager::getCurrentScreenName() const {
+    const char* names[] = {
+        "Splash", "Principal", "GPS Detalle", "Geocerca", 
+        "Estadísticas", "Alerta", "Batería", "Error", "Config", "Off"
+    };
+    
+    if (currentScreen < SCREEN_OFF) {
+        return names[currentScreen];
+    }
+    return "Desconocido";
+}
+
+// Funciones de configuración de fuentes
+void DisplayManager::setSmallFont() {
+    oledDisplay.setFont(ArialMT_Plain_10);
+}
+
+void DisplayManager::setMediumFont() {
+    oledDisplay.setFont(ArialMT_Plain_16);
+}
+
+void DisplayManager::setLargeFont() {
+    oledDisplay.setFont(ArialMT_Plain_24);
+}
+
+// Función para dibujar texto centrado
+void DisplayManager::drawCenteredText(const char* text, int16_t y) {
+    oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
+    oledDisplay.drawString(64, y, text);
+    oledDisplay.setTextAlignment(TEXT_ALIGN_LEFT);
 }
 
 // ============================================================================
-// CONTROL BÁSICO DEL DISPLAY
+// FUNCIONES AUXILIARES
 // ============================================================================
+
+bool DisplayManager::isValidPosition(const Position& pos) const {
+    return pos.valid && 
+           pos.latitude != 0.0 && 
+           pos.longitude != 0.0 &&
+           pos.satellites >= 3;
+}
+
+const char* DisplayManager::alertLevelToString(AlertLevel level) const {
+    switch(level) {
+        case AlertLevel::SAFE:
+            return "SEGURO";
+        case AlertLevel::CAUTION:
+            return "PRECAUCIÓN";
+        case AlertLevel::WARNING:
+            return "ADVERTENCIA";
+        case AlertLevel::DANGER:
+            return "PELIGRO";
+        case AlertLevel::EMERGENCY:
+            return "EMERGENCIA";
+        default:
+            return "DESCONOCIDO";
+    }
+}
 
 void DisplayManager::clear() {
     if (initialized) {
@@ -101,7 +550,6 @@ void DisplayManager::display() {
 
 void DisplayManager::setBrightness(uint8_t brightness) {
     currentBrightness = brightness;
-    // SSD1306 no tiene control directo de brillo, pero podemos simular
     if (initialized) {
         oledDisplay.setBrightness(brightness);
     }
@@ -129,116 +577,71 @@ bool DisplayManager::isOn() const {
     return displayOn;
 }
 
-// ============================================================================
-// PANTALLAS PRINCIPALES
-// ============================================================================
-
-void DisplayManager::showSplashScreen() {
-    if (!initialized) return;
-    
-    clear();
-    
-    // Logo/Texto principal
-    setLargeFont();
-    drawCenteredText("COLLAR", 5);
-    
-    setMediumFont();
-    drawCenteredText("Geofencing V3", 20);
-    
-    setSmallFont();
-    drawCenteredText("Buena Cabra Tech", 35);
-    drawCenteredText(FIRMWARE_VERSION, 45);
-    
-    // Barra de progreso de inicialización
-    drawProgressBar(20, 55, 88, 6, 100);
-    
-    display();
-    currentScreen = SCREEN_SPLASH;
+bool DisplayManager::isInitialized() const {
+    return initialized;
 }
 
-void DisplayManager::showMainScreen(const SystemStatus& status, const Position& position, 
-                                   const BatteryStatus& battery, AlertLevel alertLevel) {
-    if (!initialized) return;
-    
-    clear();
-    
-    // Header con iconos de estado
-    drawStatusBar();
-    
-    // Información principal
-    setMediumFont();
-    
-    // Coordenadas GPS
-    if (isValidPosition(position)) {
-        char latStr[16], lngStr[16];
-        formatCoordinate(latStr, position.latitude, true);
-        formatCoordinate(lngStr, position.longitude, false);
-        
-        oledDisplay.drawString(0, 15, latStr);
-        oledDisplay.drawString(0, 25, lngStr);
-    } else {
-        oledDisplay.drawString(0, 15, "GPS: No Fix");
-        oledDisplay.drawString(0, 25, "-- , --");
-    }
-    
-    // Estado de alerta
-    if (alertLevel != AlertLevel::SAFE) {
-        setSmallFont();
-        oledDisplay.drawString(0, 40, "ALERTA:");
-        oledDisplay.drawString(45, 40, alertLevelToString(alertLevel));
-        
-        // Icono de alerta parpadeante
-        if ((millis() / 500) % 2) {
-            drawAlertIcon(100, 38, alertLevel);
-        }
-    }
-    
-    // Información de sistema en la parte inferior
-    setSmallFont();
-    char statusLine[32];
-    snprintf(statusLine, sizeof(statusLine), "UP:%02lum TX:%d", 
-             status.uptime / 60, lastSystemStatus.resetCount);
-    oledDisplay.drawString(0, 54, statusLine);
-    
-    display();
-    currentScreen = SCREEN_MAIN;
-    
-    // Guardar estado para comparación
-    lastSystemStatus = status;
-    lastPosition = position;
-    lastBattery = battery;
-    lastAlertLevel = alertLevel;
+void DisplayManager::updateLastActivity() {
+    lastActivity = millis();
+}
+
+void DisplayManager::setAutoSleep(bool enabled, uint32_t timeoutMs) {
+    autoSleepEnabled = enabled;
+    autoSleepTimeout = timeoutMs;
+}
+
+void DisplayManager::showSplashScreen() {
+    showBootScreen(); // Usa la misma pantalla de inicio
 }
 
 void DisplayManager::showAlertScreen(AlertLevel level, float distance) {
     if (!initialized) return;
     
+    // Guardar tiempo de inicio de la alerta
+    static uint32_t alertStartTime = 0;
+    if (currentScreen != SCREEN_ALERT) {
+        alertStartTime = millis();
+    }
+    
     clear();
     
     // Título parpadeante para alertas críticas
-    bool blink = (level >= AlertLevel::DANGER) && ((millis() / 300) % 2);
+    bool blink = (level >= AlertLevel::DANGER) && ((millis() / 500) % 2);
     
     if (!blink || level < AlertLevel::DANGER) {
         setLargeFont();
-        drawCenteredText("ALERTA", 5);
+        drawCenteredText("!ALERTA!", 2);
     }
     
-    // Nivel de alerta
+    // Nivel de alerta con color más grande
     setMediumFont();
-    drawCenteredText(alertLevelToString(level), 20);
+    drawCenteredText(alertLevelToString(level), 18);
     
-    // Distancia
+    // Línea separadora
+    oledDisplay.drawLine(10, 32, 118, 32);
+    
+    // Distancia con formato mejorado
     setSmallFont();
     char distStr[32];
-    snprintf(distStr, sizeof(distStr), "Distancia: %.1fm", distance);
-    drawCenteredText(distStr, 35);
+    if (distance > 0) {
+        snprintf(distStr, sizeof(distStr), "Distancia: %.1f metros", distance);
+    } else {
+        snprintf(distStr, sizeof(distStr), "DENTRO DE GEOCERCA");
+    }
+    drawCenteredText(distStr, 38);
     
-    // Icono de alerta grande
-    drawAlertIcon(64 - 8, 45, level);
+    // Icono de alerta grande y animado
+    int iconOffset = (millis() / 200) % 3 - 1;
+    drawAlertIcon(64 - 8, 48 + iconOffset, level);
     
     display();
     currentScreen = SCREEN_ALERT;
     lastDistance = distance;
+    
+    // Mantener la pantalla de alerta visible por mínimo 3 segundos
+    if (millis() - alertStartTime < 3000) {
+        updateLastActivity(); // Mantener display activo
+    }
 }
 
 void DisplayManager::showBatteryScreen(const BatteryStatus& battery) {
@@ -247,7 +650,7 @@ void DisplayManager::showBatteryScreen(const BatteryStatus& battery) {
     clear();
     
     setMediumFont();
-    drawCenteredText("BATERIA", 5);
+    drawCenteredText("BATERÍA", 5);
     
     // Icono de batería grande
     drawBatteryIcon(64 - 12, 20, battery.percentage);
@@ -264,48 +667,6 @@ void DisplayManager::showBatteryScreen(const BatteryStatus& battery) {
     
     display();
     currentScreen = SCREEN_BATTERY;
-}
-
-void DisplayManager::showGPSScreen(const Position& position) {
-    if (!initialized) return;
-    
-    clear();
-    
-    setMediumFont();
-    drawCenteredText("GPS INFO", 5);
-    
-    setSmallFont();
-    
-    if (isValidPosition(position)) {
-        char latStr[20], lngStr[20];
-        formatCoordinate(latStr, position.latitude, true);
-        formatCoordinate(lngStr, position.longitude, false);
-        
-        oledDisplay.drawString(0, 18, "Lat:");
-        oledDisplay.drawString(25, 18, latStr);
-        
-        oledDisplay.drawString(0, 28, "Lng:");
-        oledDisplay.drawString(25, 28, lngStr);
-        
-        char altStr[16];
-        snprintf(altStr, sizeof(altStr), "Alt: %.1fm", position.altitude);
-        oledDisplay.drawString(0, 38, altStr);
-        
-        char satStr[16];
-        snprintf(satStr, sizeof(satStr), "Sat: %d", position.satellites);
-        oledDisplay.drawString(0, 48, satStr);
-        
-        char accStr[16];
-        snprintf(accStr, sizeof(accStr), "Acc: %.1fm", position.accuracy);
-        oledDisplay.drawString(0, 58, accStr);
-    } else {
-        drawCenteredText("Sin señal GPS", 30);
-        drawCenteredText("Buscando satelites...", 40);
-        drawLoadingAnimation(64 - 8, 50);
-    }
-    
-    display();
-    currentScreen = SCREEN_GPS;
 }
 
 void DisplayManager::showErrorScreen(const char* error) {
@@ -331,7 +692,7 @@ void DisplayManager::showErrorScreen(const char* error) {
         }
         lineBuffer[len] = '\0';
         
-        drawCenteredText(lineBuffer, y);
+        oledDisplay.drawString(0, y, lineBuffer);
         y += 10;
         
         line += len;
@@ -342,219 +703,65 @@ void DisplayManager::showErrorScreen(const char* error) {
     currentScreen = SCREEN_ERROR;
 }
 
-// ============================================================================
-// ELEMENTOS DE UI REUTILIZABLES
-// ============================================================================
-
-void DisplayManager::drawBatteryIcon(int16_t x, int16_t y, uint8_t percentage) {
-    // Contorno de batería
-    oledDisplay.drawRect(x, y, 20, 10);
-    oledDisplay.drawRect(x + 20, y + 2, 2, 6); // Terminal positivo
-    
-    // Relleno según porcentaje
-    int16_t fillWidth = (percentage * 18) / 100;
-    if (fillWidth > 0) {
-        oledDisplay.fillRect(x + 1, y + 1, fillWidth, 8);
-    }
-    
-    // Indicador de batería baja
-    if (percentage <= 20) {
-        if ((millis() / 500) % 2) {
-            oledDisplay.fillRect(x, y, 20, 10);
-        }
-    }
-}
-
-void DisplayManager::drawSignalIcon(int16_t x, int16_t y, uint8_t strength) {
-    // Barras de señal (0-4)
-    uint8_t bars = (strength * 4) / 100;
-    
-    for (uint8_t i = 0; i < 4; i++) {
-        int16_t barHeight = 2 + (i * 2);
-        if (i <= bars) {
-            oledDisplay.fillRect(x + (i * 3), y + 8 - barHeight, 2, barHeight);
-        } else {
-            oledDisplay.drawRect(x + (i * 3), y + 8 - barHeight, 2, barHeight);
-        }
+void DisplayManager::drawAlertIcon(int16_t x, int16_t y, AlertLevel level) {
+    // Dibujar un triángulo de advertencia o círculo según el nivel
+    switch(level) {
+        case AlertLevel::SAFE:
+            // Círculo con check
+            oledDisplay.drawCircle(x + 8, y + 8, 8);
+            oledDisplay.drawLine(x + 5, y + 8, x + 7, y + 11);
+            oledDisplay.drawLine(x + 7, y + 11, x + 11, y + 5);
+            break;
+            
+        case AlertLevel::CAUTION:
+        case AlertLevel::WARNING:
+            // Triángulo
+            oledDisplay.drawLine(x + 8, y, x + 2, y + 14);
+            oledDisplay.drawLine(x + 2, y + 14, x + 14, y + 14);
+            oledDisplay.drawLine(x + 14, y + 14, x + 8, y);
+            // Signo de exclamación
+            oledDisplay.drawLine(x + 8, y + 4, x + 8, y + 10);
+            oledDisplay.setPixel(x + 8, y + 12);
+            break;
+            
+        case AlertLevel::DANGER:
+        case AlertLevel::EMERGENCY:
+            // Triángulo relleno (parpadeante)
+            if ((millis() / 300) % 2) {
+                for (int i = 0; i < 14; i++) {
+                    int w = i / 2;
+                    oledDisplay.drawLine(x + 8 - w, y + i, x + 8 + w, y + i);
+                }
+            }
+            break;
     }
 }
 
 void DisplayManager::drawGPSIcon(int16_t x, int16_t y, bool connected) {
     if (connected) {
-        // Icono GPS conectado (círculo con punto)
-        oledDisplay.drawCircle(x + 4, y + 4, 4);
-        oledDisplay.fillCircle(x + 4, y + 4, 2);
+        // Satélite con señal
+        oledDisplay.drawCircle(x + 4, y + 4, 3);
+        oledDisplay.drawLine(x + 7, y + 7, x + 10, y + 10);
+        oledDisplay.drawLine(x + 1, y + 7, x - 2, y + 10);
+        // Ondas de señal
+        oledDisplay.drawCircle(x + 4, y + 4, 6);
     } else {
-        // Icono GPS desconectado (círculo vacío con X)
-        oledDisplay.drawCircle(x + 4, y + 4, 4);
-        oledDisplay.drawLine(x + 2, y + 2, x + 6, y + 6);
-        oledDisplay.drawLine(x + 2, y + 6, x + 6, y + 2);
-    }
-}
-
-void DisplayManager::drawAlertIcon(int16_t x, int16_t y, AlertLevel level) {
-    switch (level) {
-        case AlertLevel::CAUTION:
-            // Triángulo de precaución
-            oledDisplay.drawTriangle(x + 8, y, x, y + 12, x + 16, y + 12);
-            oledDisplay.drawString(x + 6, y + 4, "!");
-            break;
-            
-        case AlertLevel::WARNING:
-            // Triángulo relleno
-            oledDisplay.fillTriangle(x + 8, y, x, y + 12, x + 16, y + 12);
-            oledDisplay.setColor(BLACK);
-            oledDisplay.drawString(x + 6, y + 4, "!");
-            oledDisplay.setColor(WHITE);
-            break;
-            
-        case AlertLevel::DANGER:
-        case AlertLevel::EMERGENCY:
-            // Círculo con exclamación parpadeante
-            if ((millis() / 200) % 2) {
-                oledDisplay.fillCircle(x + 8, y + 6, 8);
-                oledDisplay.setColor(BLACK);
-                oledDisplay.drawString(x + 6, y + 2, "!");
-                oledDisplay.setColor(WHITE);
-            }
-            break;
-            
-        default:
-            break;
-    }
-}
-
-void DisplayManager::drawProgressBar(int16_t x, int16_t y, int16_t width, int16_t height, uint8_t percentage) {
-    // Contorno
-    oledDisplay.drawRect(x, y, width, height);
-    
-    // Relleno
-    int16_t fillWidth = (percentage * (width - 2)) / 100;
-    if (fillWidth > 0) {
-        oledDisplay.fillRect(x + 1, y + 1, fillWidth, height - 2);
-    }
-}
-
-void DisplayManager::drawStatusBar() {
-    // Línea superior
-    oledDisplay.drawLine(0, 12, 128, 12);
-    
-    // Iconos de estado
-    drawGPSIcon(0, 2, isValidPosition(lastPosition));
-    drawSignalIcon(15, 2, lastSystemStatus.radioInitialized ? 75 : 0);
-    drawBatteryIcon(100, 2, lastBattery.percentage);
-    
-    // Reloj/uptime en el centro
-    char timeStr[16];
-    uint32_t hours = (lastSystemStatus.uptime / 3600) % 24;
-    uint32_t minutes = (lastSystemStatus.uptime / 60) % 60;
-    snprintf(timeStr, sizeof(timeStr), "%02lu:%02lu", hours, minutes);
-    
-    setSmallFont();
-    int16_t textWidth = getTextWidth(timeStr);
-    oledDisplay.drawString(64 - textWidth/2, 2, timeStr);
-}
-
-// ============================================================================
-// GESTIÓN DE PANTALLAS Y AUTO-SLEEP
-// ============================================================================
-
-void DisplayManager::setScreenMode(ScreenMode mode) {
-    currentScreen = mode;
-    updateLastActivity();
-}
-
-DisplayManager::ScreenMode DisplayManager::getCurrentScreenMode() const {
-    return currentScreen;
-}
-
-void DisplayManager::setAutoSleep(bool enabled, uint32_t timeoutMs) {
-    autoSleepEnabled = enabled;
-    autoSleepTimeout = timeoutMs;
-}
-
-void DisplayManager::updateLastActivity() {
-    lastActivity = millis();
-}
-
-void DisplayManager::update() {
-    if (!initialized) return;
-    
-    animationCounter++;
-    
-    // Verificar auto-sleep
-    if (autoSleepEnabled) {
-        checkAutoSleep();
-    }
-}
-
-// ============================================================================
-// MÉTODOS PRIVADOS
-// ============================================================================
-
-void DisplayManager::setupDisplay() {
-    oledDisplay.displayOn();
-    oledDisplay.clear();
-    oledDisplay.flipScreenVertically();
-    oledDisplay.setFont(ArialMT_Plain_10);
-}
-
-void DisplayManager::resetDisplay() {
-    pinMode(rstPin, OUTPUT);
-    digitalWrite(rstPin, LOW);
-    delay(50);
-    digitalWrite(rstPin, HIGH);
-    delay(50);
-}
-
-void DisplayManager::formatCoordinate(char* buffer, double coordinate, bool isLatitude) {
-    char direction = ' ';
-    if (isLatitude) {
-        direction = (coordinate >= 0) ? 'N' : 'S';
-    } else {
-        direction = (coordinate >= 0) ? 'E' : 'W';
-    }
-    
-    snprintf(buffer, 16, "%.4f%c", abs(coordinate), direction);
-}
-
-void DisplayManager::drawLoadingAnimation(int16_t x, int16_t y) {
-    uint8_t frame = (animationCounter / 4) % 8;
-    
-    for (uint8_t i = 0; i < 8; i++) {
-        if (i == frame) {
-            oledDisplay.fillCircle(x + (i % 4) * 4, y + (i / 4) * 4, 1);
-        } else {
-            oledDisplay.drawCircle(x + (i % 4) * 4, y + (i / 4) * 4, 1);
+        // Satélite sin señal (parpadeante)
+        if ((millis() / 500) % 2) {
+            oledDisplay.drawCircle(x + 4, y + 4, 3);
+            oledDisplay.drawLine(x, y, x + 8, y + 8);
         }
     }
 }
 
-void DisplayManager::checkAutoSleep() {
-    if (displayOn && (millis() - lastActivity > autoSleepTimeout)) {
-        turnOff();
+void DisplayManager::drawSignalIcon(int16_t x, int16_t y, uint8_t strength) {
+    // Barras de señal (0-5)
+    for (int i = 0; i < 5; i++) {
+        int barHeight = (i + 1) * 3;
+        if (i < strength) {
+            oledDisplay.fillRect(x + i * 3, y + 15 - barHeight, 2, barHeight);
+        } else {
+            oledDisplay.drawRect(x + i * 3, y + 15 - barHeight, 2, barHeight);
+        }
     }
-}
-
-int16_t DisplayManager::getTextWidth(const char* text, const uint8_t* font) {
-    if (font) oledDisplay.setFont(font);
-    return oledDisplay.getStringWidth(text);
-}
-
-void DisplayManager::setSmallFont() {
-    oledDisplay.setFont(ArialMT_Plain_10);
-}
-
-void DisplayManager::setMediumFont() {
-    oledDisplay.setFont(ArialMT_Plain_16);
-}
-
-void DisplayManager::setLargeFont() {
-    oledDisplay.setFont(ArialMT_Plain_24);
-}
-
-void DisplayManager::drawCenteredText(const char* text, int16_t y, const uint8_t* font) {
-    if (font) oledDisplay.setFont(font);
-    int16_t textWidth = oledDisplay.getStringWidth(text);
-    oledDisplay.drawString(64 - textWidth/2, y, text);
 }
