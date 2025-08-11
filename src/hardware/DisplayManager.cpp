@@ -128,12 +128,6 @@ void DisplayManager::showBootScreen() {
         oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
         oledDisplay.drawString(64, 48, loadingSteps[i]);
         
-        // Mostrar porcentaje al lado de la barra
-        char percStr[8];
-        snprintf(percStr, sizeof(percStr), "%d%%", progress);
-        oledDisplay.setTextAlignment(TEXT_ALIGN_RIGHT);
-        oledDisplay.drawString(128, 35, percStr);
-        
         display();
         delay(600);
     }
@@ -414,7 +408,7 @@ void DisplayManager::updateGeofenceInfo(const char* name, GeofenceType type,
     displayState.insideGeofence = inside;
 }
 
-// Barra de progreso mejorada
+// Barra de progreso simplificada
 void DisplayManager::drawProgressBar(int16_t x, int16_t y, int16_t width, 
                                     int16_t height, uint8_t percentage) {
     // Marco de la barra
@@ -426,13 +420,12 @@ void DisplayManager::drawProgressBar(int16_t x, int16_t y, int16_t width,
         oledDisplay.fillRect(x + 1, y + 1, fillWidth, height - 2);
     }
     
-    // Texto del porcentaje (opcional, si hay espacio)
-    if (width > 30) {
-        char percStr[5];
-        snprintf(percStr, sizeof(percStr), "%d%%", percentage);
-        oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
-        oledDisplay.drawString(x + width/2, y + height + 2, percStr);
-    }
+    // Mostrar porcentaje al lado derecho de la barra
+    char percStr[5];
+    snprintf(percStr, sizeof(percStr), "%d%%", percentage);
+    oledDisplay.setTextAlignment(TEXT_ALIGN_LEFT);
+    oledDisplay.setFont(ArialMT_Plain_10);
+    oledDisplay.drawString(x + width + 5, y - 2, percStr);
 }
 
 // Funciones auxiliares mejoradas

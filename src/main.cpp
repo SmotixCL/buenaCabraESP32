@@ -1,5 +1,4 @@
 
-
 #include <Arduino.h>
 #include <Wire.h>
 #include <SSD1306Wire.h>
@@ -105,47 +104,39 @@ bool gpsHasFix = false;
 AlertLevel currentAlert = AlertLevel::SAFE;
 
 // ============================================================================
-// FUNCIONES DE DEBUGGING
+// CALLBACK PARA ACTUALIZACIONES DE GEOCERCA VÍA DOWNLINK
 // ============================================================================
 
-void ledSignal(int pattern) {
-    switch(pattern) {
-        case 1: // Sistema iniciando
-            for(int i=0; i<3; i++) { 
-                digitalWrite(LED_PIN, HIGH); delay(100); 
-                digitalWrite(LED_PIN, LOW); delay(100); 
-            }
-            break;
-        case 2: // Manager OK
-            for(int i=0; i<2; i++) { 
-                digitalWrite(LED_PIN, HIGH); delay(200); 
-                digitalWrite(LED_PIN, LOW); delay(200); 
-            }
-            break;
-        case 3: // Error
-            for(int i=0; i<5; i++) { 
-                digitalWrite(LED_PIN, HIGH); delay(50); 
-                digitalWrite(LED_PIN, LOW); delay(50); 
-            }
-            break;
-        case 4: // Setup completo
-            for(int i=0; i<6; i++) { 
-                digitalWrite(LED_PIN, HIGH); delay(150); 
-                digitalWrite(LED_PIN, LOW); delay(150); 
-            }
-            break;
-        case 5: // GPS fix
-            digitalWrite(LED_PIN, HIGH); delay(500); 
-            digitalWrite(LED_PIN, LOW);
-            break;
-        case 6: // LoRaWAN packet
-            digitalWrite(LED_PIN, HIGH); delay(50); digitalWrite(LED_PIN, LOW); delay(50);
-            digitalWrite(LED_PIN, HIGH); delay(50); digitalWrite(LED_PIN, LOW);
-            break;
-        case 9: // Heartbeat
-            digitalWrite(LED_PIN, HIGH); delay(100); 
-            digitalWrite(LED_PIN, LOW);
-            break;
+void onGeofenceUpdate(const GeofenceUpdate& update) {
+    LOG_I("🌐 Actualizando geocerca desde downlink:");
+    LOG_I("  Nombre: %s", update.name);
+    LOG_I("  Centro: %.6f, %.6f", update.centerLat, update.centerLng);
+    LOG_I("  Radio: %.0f metros", update.radius);
+    
+    // Actualizar GeofenceManager
+    geofenceManager.setGeofence(update.centerLat, update.centerLng, update.radius, update.name);
+    
+    // Actualizar información local para la pantalla
+    currentGeofence.name = String(update.name);
+    currentGeofence.centerLat = update.centerLat;
+    currentGeofence.centerLng = update.centerLng;
+    currentGeofence.radius = update.radius;
+    currentGeofence.type = GeofenceType::CIRCLE; // Solo círculos por ahora
+    
+    // Emitir tono de confirmación
+    buzzerManager.playTone(1500, 200, 60);  // Tono de confirmación
+    delay(100);
+    buzzerManager.playTone(1800, 200, 60);  // Tono doble
+    
+    LOG_I("✅ Geocerca actualizada exitosamente desde LoRaWAN");
+    
+    // Recalcular distancia actual con la nueva geocerca
+    if (gpsHasFix) {
+        currentGeofence.currentDistance = geofenceManager.getDistance(currentPosition);
+        currentGeofence.isInside = geofenceManager.isInsideGeofence(currentPosition);
+        
+        LOG_I("📍 Nueva distancia a geocerca: %.1fm (Dentro: %s)", 
+              currentGeofence.currentDistance, currentGeofence.isInside ? "Sí" : "No");
     }
 }
 
@@ -153,31 +144,21 @@ void ledSignal(int pattern) {
 // CONFIGURACIÓN INICIAL
 // ============================================================================
 
-void initializeChacayPosition() {
-    // ✅ POSICIÓN CHACAY BIKEPARK - Asignación individual (no lista)
-    currentPosition.latitude = -37.34640277978371;
-    currentPosition.longitude = -72.91495492379738;
-    currentPosition.altitude = 100.0f;
+void initializeDefaultPosition() {
+    // Inicializar posición como inválida hasta obtener GPS real
+    currentPosition.latitude = 0.0;
+    currentPosition.longitude = 0.0;
+    currentPosition.altitude = 0.0f;
     currentPosition.satellites = 0;
     currentPosition.accuracy = 0.0f;
     currentPosition.timestamp = millis();
-    currentPosition.valid = true;
+    currentPosition.valid = false; // Marcar como inválida
 }
 
 void setupGeofence() {
-    // ✅ Configurar geocerca usando setGeofence() API real
-    double centerLat = -37.34640277978371; // Chacay Bikepark
-    double centerLng = -72.91495492379738;
-    float radius = 50.0f; // 50 metros de radio
-    
-    geofenceManager.setGeofence(centerLat, centerLng, radius, "Chacay Park");
-    geofenceManager.activate(true);
-    
-    if (geofenceManager.isActive()) {
-        ledSignal(2); // Geocerca OK
-    } else {
-        ledSignal(3); // Error configurando geocerca
-    }
+    // NO configurar geocerca por defecto al inicio
+    // El sistema esperará a recibir una geocerca desde la web o desde memoria
+    LOG_I("🌐 Esperando configuración de geocerca desde ChirpStack...");
 }
 
 void configureAlertCallbacks() {
@@ -332,7 +313,7 @@ void handleScreenChange() {
     screenManager.currentScreen = (screenManager.currentScreen + 1) % 4;
     screenManager.lastAutoRotate = millis(); // Reset auto-rotación
     
-    // Feedback visual y sonoro
+    // Feedback sonoro solamente
     buzzerManager.playTone(1000, 50, 50); // Beep corto
     
     // Log del cambio
@@ -437,11 +418,10 @@ void setup() {
     // ✅ INICIALIZAR RANDOM PARA DEV-NONCE ALEATORIO
     randomSeed(analogRead(A0) + millis() + ESP.getCycleCount());
     
-    ledSignal(1); // Sistema iniciando
-    delay(1000);
+    delay(500);
     
-    // Inicializar posición por defecto
-    initializeChacayPosition();
+    // Inicializar posición como inválida
+    initializeDefaultPosition();
     
     // I2C
     Wire.begin(OLED_SDA, OLED_SCL);
@@ -449,106 +429,65 @@ void setup() {
     
     // 1. BuzzerManager
     if (buzzerManager.init() == Result::SUCCESS) {
-        ledSignal(2); // OK
         buzzerManager.playTone(1000, 200, 80);
         delay(300);
-    } else {
-        ledSignal(3); // Error
     }
     delay(500);
     
     // 2. PowerManager
     if (powerManager.init() == Result::SUCCESS) {
-        ledSignal(2); // OK
         powerManager.readBattery();
         batteryStatus = powerManager.getBatteryStatus();
-    } else {
-        ledSignal(3); // Error
     }
     delay(500);
     
     // 3. DisplayManager
     if (displayManager.init() == Result::SUCCESS) {
-        ledSignal(2); // OK
         displayManager.showSplashScreen();
         delay(2000);
-    } else {
-        ledSignal(3); // Error
     }
     delay(500);
     
     // 4. GPSManager
-    if (gpsManager.init() == Result::SUCCESS) {
-        ledSignal(2); // OK
-    } else {
-        ledSignal(3); // Error
-    }
+    gpsManager.init();
     delay(500);
     
     // 5. GeofenceManager
     if (geofenceManager.init() == Result::SUCCESS) {
-        ledSignal(2); // OK
         setupGeofence();
-    } else {
-        ledSignal(3); // Error
     }
     delay(500);
     
     // 6. AlertManager
     if (alertManager.init() == Result::SUCCESS) {
-        ledSignal(2); // OK
         configureAlertCallbacks();
-    } else {
-        ledSignal(3); // Error
     }
     delay(500);
     
     // 7. RadioManager
     if (radioManager.init() == Result::SUCCESS) {
-        ledSignal(2); // OK
+        // 🔥 CONFIGURAR CALLBACK PARA ACTUALIZACIONES DE GEOCERCA
+        radioManager.setGeofenceUpdateCallback(onGeofenceUpdate);
         
         // Configurar LoRa con frecuencia CORRECTA para AU915 Sub-banda 1
         if (radioManager.setupLoRa(916.8, 125.0, 9, 7, 20) == Result::SUCCESS) {
-            ledSignal(2); // LoRa OK
-            
             // Configurar LoRaWAN
             if (radioManager.setupLoRaWAN() == Result::SUCCESS) {
-                ledSignal(2); // LoRaWAN OK
-                
                 // ✅ OTAA JOIN CON REINTENTOS
                 bool joinAttempted = false;
                 for (int attempt = 1; attempt <= 3; attempt++) {
-                    ledSignal(1); // Intentando join
-                    
                     if (radioManager.joinOTAA(LORAWAN_DEV_EUI, LORAWAN_APP_EUI, LORAWAN_APP_KEY) == Result::SUCCESS) {
                         loraJoined = true;
                         buzzerManager.playSuccessTone();
                         
-                        // 6 parpadeos = LoRaWAN Join exitoso
-                        for(int i=0; i<6; i++) {
-                            digitalWrite(LED_PIN, HIGH); delay(100);
-                            digitalWrite(LED_PIN, LOW); delay(100);
-                        }
-                        
                         joinAttempted = true;
                         break; // Éxito, salir del loop
                     } else {
-                        ledSignal(3); // Error en intento
                         delay(5000 * attempt); // Esperar 5s, 10s, 15s entre intentos
-                    }
-                }
-                
-                if (!joinAttempted || !loraJoined) {
-                    // Fallaró join después de 3 intentos
-                    for(int i=0; i<10; i++) {
-                        digitalWrite(LED_PIN, HIGH); delay(50);
-                        digitalWrite(LED_PIN, LOW); delay(50);
                     }
                 }
             }
         }
-    } else {
-        ledSignal(3); // Error
     }
     
     // Inicializar botón PRG
@@ -560,8 +499,7 @@ void setup() {
     
     // Sistema listo
     systemReady = true;
-    ledSignal(4); // Setup completo
-    delay(2000);
+    delay(1000);
     
     // Inicializar timers
     uint32_t now = millis();
@@ -594,7 +532,6 @@ void loop() {
         if (hasGPSFix && (gpsPos.latitude != 0.0 && gpsPos.longitude != 0.0)) {
             currentPosition = gpsPos;
             gpsHasFix = true;
-            ledSignal(5); // GPS fix OK
         } else {
             gpsHasFix = false;
         }
@@ -615,14 +552,6 @@ void loop() {
         powerManager.readBattery();
         batteryStatus = powerManager.getBatteryStatus();
         
-        // Alerta de batería baja
-        if (batteryStatus.percentage < 20) {
-            for(int i=0; i<3; i++) {
-                digitalWrite(LED_PIN, HIGH); delay(50);
-                digitalWrite(LED_PIN, LOW); delay(50);
-            }
-        }
-        
         lastBatteryCheck = currentTime;
     }
     
@@ -636,32 +565,8 @@ void loop() {
     systemStatus.freeHeap = ESP.getFreeHeap();
     systemStatus.currentState = (gpsHasFix ? 2 : 0) + (loraJoined ? 1 : 0);
     
-    // Si hay alerta activa, mostrar pantalla de alerta
-    if (currentAlert != AlertLevel::SAFE) {
-        // Mostrar pantalla de alerta con prioridad
-        displayManager.showAlertScreen(currentAlert, currentGeofence.currentDistance);
-        
-        // Después de 5 segundos, permitir navegación normal
-        static uint32_t alertShowTime = 0;
-        if (alertShowTime == 0) {
-            alertShowTime = millis();
-        }
-        
-        if (millis() - alertShowTime > 5000) {
-            // Después de 5 segundos, permitir cambiar pantallas
-            updateDisplay();
-        }
-        
-        // Resetear tiempo si la alerta cambia
-        static AlertLevel lastAlert = AlertLevel::SAFE;
-        if (currentAlert != lastAlert) {
-            alertShowTime = millis();
-            lastAlert = currentAlert;
-        }
-    } else {
-        // Sin alertas, navegación normal
-        updateDisplay();
-    }
+    // Navegación normal de pantallas - sin interrupciones de alerta
+    updateDisplay();
     
     // ✅ REINTENTAR JOIN SI NO ESTÁ CONECTADO
     static uint32_t lastJoinAttempt = 0;
@@ -669,11 +574,6 @@ void loop() {
         if (radioManager.joinOTAA(LORAWAN_DEV_EUI, LORAWAN_APP_EUI, LORAWAN_APP_KEY) == Result::SUCCESS) {
             loraJoined = true;
             buzzerManager.playSuccessTone();
-            // 4 parpadeos = Join exitoso en runtime
-            for(int i=0; i<4; i++) {
-                digitalWrite(LED_PIN, HIGH); delay(100);
-                digitalWrite(LED_PIN, LOW); delay(100);
-            }
         }
         lastJoinAttempt = currentTime;
     }
@@ -705,21 +605,17 @@ void loop() {
         Result txResult = radioManager.sendPacket(payload, payloadLength, LORAWAN_PORT_GPS);
         if (txResult == Result::SUCCESS) {
             packetCounter++;
-            ledSignal(6); // Packet sent
-            buzzerManager.playTone(1200, 50, 30); // Confirmación
-        } else {
-            ledSignal(3); // Error
+            buzzerManager.playTone(1200, 50, 30); // Confirmación suave
         }
         
         lastLoRaTransmit = currentTime;
     }
     
-    // Procesar downlinks
+    // 🔥 PROCESAR DOWNLINKS - CRÍTICO PARA ACTUALIZACIONES DE GEOCERCA
     radioManager.processDownlinks();
     
-    // Heartbeat cada 20 segundos
+    // Heartbeat cada 30 segundos - simplificado sin LEDs
     if (currentTime - lastHeartbeat > STABLE_HEARTBEAT_INTERVAL) {
-        ledSignal(9); // Heartbeat
         lastHeartbeat = currentTime;
     }
     

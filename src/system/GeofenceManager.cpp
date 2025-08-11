@@ -32,13 +32,22 @@ Result GeofenceManager::init() {
     
     LOG_I("📍 Inicializando Geofence Manager...");
     
-    // Cargar configuración guardada o usar valores por defecto
-    if (loadConfiguration() != Result::SUCCESS) {
-        resetToDefaults();
+    // NO cargar geocerca por defecto al inicio
+    // Solo inicializar como vacío
+    primaryGeofence = Geofence();
+    primaryGeofence.active = false;
+    active = false;
+    
+    // Intentar cargar configuración guardada
+    if (loadConfiguration() == Result::SUCCESS) {
+        LOG_I("📍 Geocerca cargada desde memoria");
+    } else {
+        LOG_I("📍 Sin geocerca previa, esperando configuración");
+        // NO resetear a valores por defecto
     }
     
     initialized = true;
-    LOG_INIT("Geofence Manager", true);
+    LOG_I("✅ Geofence Manager inicializado");
     
     return Result::SUCCESS;
 }
@@ -64,6 +73,7 @@ void GeofenceManager::setGeofence(const Geofence& geofence) {
     
     primaryGeofence = geofence;
     primaryGeofence.active = true;
+    active = true;  // Activar automáticamente
     
     LOG_I("📍 Geocerca configurada: %s - %.6f,%.6f R=%.1fm", 
           primaryGeofence.name, primaryGeofence.centerLat, 
@@ -73,6 +83,13 @@ void GeofenceManager::setGeofence(const Geofence& geofence) {
     minDistanceRecorded = 999999.0f;
     lastInsideState = true;
     lastAlertLevel = AlertLevel::SAFE;
+    
+    // GUARDAR CONFIGURACIÓN AUTOMÁTICAMENTE
+    if (saveConfiguration() == Result::SUCCESS) {
+        LOG_I("💾 Geocerca guardada en memoria persistente");
+    } else {
+        LOG_W("⚠️ No se pudo guardar la geocerca en memoria");
+    }
 }
 
 Geofence GeofenceManager::getGeofence() const {
@@ -345,7 +362,11 @@ void GeofenceManager::update(const Position& currentPosition) {
 
 Result GeofenceManager::saveConfiguration() {
     Preferences prefs;
-    if (!prefs.begin("geofence", false)) {
+    
+    // Intentar abrir namespace en modo escritura
+    bool opened = prefs.begin("geofence", false);
+    if (!opened) {
+        LOG_E("📍 Error al abrir namespace 'geofence' para escritura");
         return Result::ERROR_HARDWARE;
     }
     
@@ -366,14 +387,25 @@ Result GeofenceManager::saveConfiguration() {
 }
 
 Result GeofenceManager::loadConfiguration() {
+    // WORKAROUND: Crear namespace si no existe
     Preferences prefs;
-    if (!prefs.begin("geofence", true)) {
+    
+    // Primero intentar crear/abrir en modo escritura para asegurar que existe
+    if (prefs.begin("geofence", false)) {
+        prefs.end();
+    }
+    
+    // Ahora abrir en modo lectura
+    bool opened = prefs.begin("geofence", true);
+    if (!opened) {
+        LOG_W("📍 No se pudo abrir namespace 'geofence' para lectura");
         return Result::ERROR_HARDWARE;
     }
     
     // Verificar si hay configuración guardada
     if (!prefs.isKey("lat")) {
         prefs.end();
+        LOG_D("📍 No hay geocerca guardada en memoria");
         return Result::ERROR_INVALID_PARAM;
     }
     

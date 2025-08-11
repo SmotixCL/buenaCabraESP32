@@ -19,7 +19,7 @@ AlertManager::AlertManager(BuzzerManager& buzzer, DisplayManager& display) :
     maxLevelReached(AlertLevel::SAFE),
     escalationEnabled(true),
     autoStopEnabled(true),
-    displayAlertsEnabled(true),
+    displayAlertsEnabled(false), // 🔥 DESHABILITADO - No mostrar pantallas emergentes
     audioAlertsEnabled(true),
     levelStartTime(0),
     escalationPending(false),
@@ -395,15 +395,12 @@ AlertLevel AlertManager::getNextLevel(AlertLevel current) const {
 void AlertManager::executeAlert() {
     if (!alertActive) return;
     
-    // Actualizar buzzer
+    // Actualizar buzzer solamente - sin interrumpir pantallas
     if (audioAlertsEnabled) {
         updateBuzzer();
     }
     
-    // Actualizar display
-    if (displayAlertsEnabled) {
-        updateDisplay();
-    }
+    // 🔥 ELIMINADO: updateDisplay() - Ya no interrumpe las pantallas predefinidas
     
     // Log periódico
     static uint32_t lastLog = 0;
@@ -414,28 +411,14 @@ void AlertManager::executeAlert() {
 }
 
 void AlertManager::updateDisplay() {
-    // Actualizar display con la alerta
-    static uint32_t lastAlertDisplayTime = 0;
-    static AlertLevel lastDisplayedLevel = AlertLevel::SAFE;
-    static uint32_t alertDisplayStartTime = 0;
+    // 🔥 MÉTODO DESHABILITADO - No mostrar pantallas emergentes de alerta
+    // La información de alerta ahora se muestra solo en la pantalla principal
+    // como parte del estado normal del sistema, sin interrumpir la navegación
     
-    // Si es una nueva alerta, resetear el tiempo de inicio
-    if (currentLevel != lastDisplayedLevel) {
-        alertDisplayStartTime = millis();
-        lastDisplayedLevel = currentLevel;
-    }
-    
-    // Mantener la pantalla de alerta visible por mínimo 3 segundos
-    uint32_t minDisplayTime = 3000;  // 3 segundos mínimo
-    uint32_t elapsedTime = millis() - alertDisplayStartTime;
-    
-    // Mostrar alerta nueva o actualizar cada 250ms (más frecuente para mejor visibilidad)
-    if (currentLevel != AlertLevel::SAFE && 
-        (elapsedTime < minDisplayTime || millis() - lastAlertDisplayTime > 250)) {
-        
-        displayManager.showAlertScreen(currentLevel, currentDistance);
-        lastAlertDisplayTime = millis();
-    }
+    // Las alertas se pueden ver en:
+    // 1. Pantalla principal: Muestra el nivel de alerta actual
+    // 2. Pantalla de geocerca: Muestra el estado y distancia
+    // 3. Audio: Buzzer sigue funcionando para alertas sonoras
 }
 
 void AlertManager::updateBuzzer() {

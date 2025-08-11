@@ -1,9 +1,15 @@
 #include "RadioManager.h"
+#include <Preferences.h>  // Para guardar configuración persistente
 
 // ============================================================================
 // VARIABLE ESTÁTICA PARA INTERRUPT CALLBACK
 // ============================================================================
 RadioManager* RadioManager::instance = nullptr;
+
+// ============================================================================
+// VARIABLE PARA CALLBACK DE GEOCERCA
+// ============================================================================
+GeofenceUpdateCallback RadioManager::geofenceUpdateCallback = nullptr;
 
 // ============================================================================
 // CONSTRUCTOR E INICIALIZACIÓN
@@ -50,7 +56,7 @@ Result RadioManager::init() {
     initialized = true;
     currentState = STATE_IDLE;
     
-    LOG_INIT("Radio Manager", true);
+    LOG_I("✅ Radio Manager inicializado");
     LOG_I("📡 SX1262 configurado en %.1f MHz", 915.0);
     
     return Result::SUCCESS;
@@ -123,19 +129,29 @@ Result RadioManager::joinOTAA(const uint8_t* devEUI, const uint8_t* appEUI, cons
     // ✅ FORZAR DEV-NONCE INCREMENTAL PERSISTENTE
     static uint16_t persistentDevNonce = 0;
     
-    // Cargar dev-nonce desde memoria persistente si es posible
-    // En ESP32 podríamos usar Preferences o EEPROM
-    #ifdef USE_PREFERENCES
-        Preferences prefs;
-        prefs.begin("lorawan", false);
-        persistentDevNonce = prefs.getUShort("devnonce", random(1000, 10000));
+    // Usar Preferences de forma segura para DevNonce
+    Preferences prefs;
+    
+    // WORKAROUND: Asegurar que el namespace existe
+    // Intentar abrir namespace lorawan
+    if (prefs.begin("lorawan", false)) {
+        // Leer devnonce guardado o generar uno nuevo
+        persistentDevNonce = prefs.getUShort("devnonce", 0);
+        
+        if (persistentDevNonce == 0) {
+            // Primera vez, generar aleatorio
+            persistentDevNonce = random(1000, 30000);
+        }
+        
         persistentDevNonce++; // Incrementar para siguiente uso
         prefs.putUShort("devnonce", persistentDevNonce);
         prefs.end();
-    #else
-        // Sin persistencia, usar tiempo + random
+        LOG_I("📦 DevNonce persistente: %u", persistentDevNonce);
+    } else {
+        // Si falla Preferences, usar valor basado en tiempo
         persistentDevNonce = (millis() % 30000) + random(1000, 35000);
-    #endif
+        LOG_W("⚠️ No se pudo abrir Preferences, usando DevNonce temporal: %u", persistentDevNonce);
+    }
     
     LOG_I("🎲 Usando dev-nonce: %u", persistentDevNonce);
     
@@ -199,9 +215,8 @@ Result RadioManager::joinABP(const uint8_t* devAddr, const uint8_t* nwkSKey, con
     lorawan.beginABP(deviceAddr, fNwkSIntKey, sNwkSIntKey, nwkSEncKey, appSKeyLocal);
     
     // ✅ RESTAURAR FRAME COUNTERS PERSISTENTES PARA ABP
-    #ifdef USE_PREFERENCES
-        Preferences prefs;
-        prefs.begin("lorawan", false);
+    Preferences prefs;
+    if (prefs.begin("lorawan", false)) {
         uint32_t fcntUp = prefs.getULong("fcntup", 0);
         uint32_t fcntDown = prefs.getULong("fcntdown", 0);
         prefs.end();
@@ -211,9 +226,9 @@ Result RadioManager::joinABP(const uint8_t* devAddr, const uint8_t* nwkSKey, con
         // lorawan.setFrameCounters(fcntUp, fcntDown);
         
         LOG_I("📦 Frame counters restaurados: Up=%lu, Down=%lu", fcntUp, fcntDown);
-    #else
+    } else {
         LOG_W("⚠️ Sin persistencia de frame counters, posibles problemas con reinicios");
-    #endif
+    }
     
     // En ABP la sesión está lista inmediatamente
     joined = true;
@@ -228,6 +243,14 @@ Result RadioManager::joinABP(const uint8_t* devAddr, const uint8_t* nwkSKey, con
 
 bool RadioManager::isJoined() const {
     return joined;
+}
+
+// ============================================================================
+// CALLBACK PARA ACTUALIZACIONES DE GEOCERCA
+// ============================================================================
+
+void RadioManager::setGeofenceUpdateCallback(GeofenceUpdateCallback callback) {
+    geofenceUpdateCallback = callback;
 }
 
 // ============================================================================
@@ -268,11 +291,10 @@ Result RadioManager::sendPacket(const uint8_t* data, size_t length, uint8_t port
               packetsSent, lastRSSI, lastSNR);
         
         // ✅ GUARDAR FRAME COUNTERS DESPUÉS DE TX EXITOSO
-        #ifdef USE_PREFERENCES
-            // Guardar cada 10 transmisiones para no desgastar la flash
-            if (packetsSent % 10 == 0) {
-                Preferences prefs;
-                prefs.begin("lorawan", false);
+        // Guardar cada 10 transmisiones para no desgastar la flash
+        if (packetsSent % 10 == 0) {
+            Preferences prefs;
+            if (prefs.begin("lorawan", false)) {
                 // Obtener frame counters actuales si RadioLib lo permite
                 // uint32_t fcntUp = lorawan.getFCntUp();
                 // prefs.putULong("fcntup", fcntUp);
@@ -280,7 +302,7 @@ Result RadioManager::sendPacket(const uint8_t* data, size_t length, uint8_t port
                 prefs.end();
                 LOG_D("🔐 Frame counters guardados");
             }
-        #endif
+        }
         
         // Verificar si hay downlink
         if (downlinkSize > 0) {
@@ -610,6 +632,9 @@ void RadioManager::processDownlink(const uint8_t* data, size_t length, uint8_t p
         case 3:  // Comandos de configuración
             parseConfigCommand(data, length);
             break;
+        case 10: // Geocerca desde el backend
+            parseGeofenceCommand(data, length);
+            break;
         default:
             LOG_W("📡 Puerto de downlink desconocido: %d", port);
             break;
@@ -693,6 +718,51 @@ void RadioManager::parseConfigCommand(const uint8_t* data, size_t length) {
             LOG_W("📡 Parámetro config desconocido: 0x%02X", param);
             break;
     }
+}
+
+void RadioManager::parseGeofenceCommand(const uint8_t* data, size_t length) {
+    // Formato esperado: [tipo][lat(4)][lng(4)][radio(2)] = 11 bytes mínimo
+    if (length < 11) {
+        LOG_W("📡 Comando de geocerca muy corto: %d bytes", length);
+        return;
+    }
+    
+    uint8_t geofenceType = data[0];
+    
+    // Extraer coordenadas (en formato float little-endian)
+    float lat, lng;
+    memcpy(&lat, &data[1], 4);
+    memcpy(&lng, &data[5], 4);
+    
+    // Extraer radio (2 bytes, uint16)
+    uint16_t radius = (data[9] << 8) | data[10];
+    
+    LOG_I("🌐 GEOCERCA RECIBIDA vía LoRaWAN:");
+    LOG_I("  Tipo: %d", geofenceType);
+    LOG_I("  Centro: %.6f, %.6f", lat, lng);
+    LOG_I("  Radio: %d metros", radius);
+    
+    // 🔥 ACTUALIZACIÓN CRÍTICA: Llamar al callback para actualizar la geocerca
+    if (geofenceUpdateCallback) {
+        // Crear estructura de geocerca
+        GeofenceUpdate update;
+        update.centerLat = lat;
+        update.centerLng = lng;
+        update.radius = (float)radius;
+        update.type = geofenceType;
+        strncpy(update.name, "Backend", sizeof(update.name) - 1);
+        update.name[sizeof(update.name) - 1] = '\0';
+        
+        // Llamar al callback para actualizar la geocerca en el sistema principal
+        geofenceUpdateCallback(update);
+        
+        LOG_I("✅ Geocerca actualizada en sistema principal");
+    } else {
+        LOG_W("⚠️ Callback de geocerca no configurado");
+    }
+    
+    // Emitir sonido de confirmación
+    LOG_I("🎵 Tono de confirmación de geocerca programado");
 }
 
 // ============================================================================

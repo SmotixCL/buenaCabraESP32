@@ -11,6 +11,22 @@
 
 /*
  * ============================================================================
+ * ESTRUCTURAS PARA ACTUALIZACIONES DE GEOCERCA VÍA DOWNLINK
+ * ============================================================================
+ */
+
+struct GeofenceUpdate {
+    double centerLat;
+    double centerLng;
+    float radius;
+    uint8_t type;  // 0=círculo, 1=polígono
+    char name[16]; // Nombre de la geocerca
+};
+
+typedef void (*GeofenceUpdateCallback)(const GeofenceUpdate& update);
+
+/*
+ * ============================================================================
  * RADIO MANAGER - GESTIÓN LORA/LORAWAN
  * ============================================================================
  */
@@ -68,6 +84,9 @@ public:
     void setJoinCallback(JoinCallback callback);
     void setTxCallback(TxCallback callback);
     
+    // 🔥 NUEVO: Callback para actualizaciones de geocerca
+    void setGeofenceUpdateCallback(GeofenceUpdateCallback callback);
+    
     // Estados del radio
     enum RadioState {
         STATE_IDLE,
@@ -121,6 +140,9 @@ private:
     JoinCallback joinCallback;
     TxCallback txCallback;
     
+    // 🔥 NUEVO: Callback estático para actualizaciones de geocerca
+    static GeofenceUpdateCallback geofenceUpdateCallback;
+    
     // Variables para manejo de downlinks
     bool pendingDownlink;
     size_t downlinkLength;
@@ -146,6 +168,7 @@ private:
     void parseSystemCommand(const uint8_t* data, size_t length);
     void parseAlertCommand(const uint8_t* data, size_t length);
     void parseConfigCommand(const uint8_t* data, size_t length);
+    void parseGeofenceCommand(const uint8_t* data, size_t length);
     
     // Gestión de errores
     void handleRadioError(int16_t errorCode);
