@@ -174,11 +174,18 @@ void DisplayManager::showMainScreen(const SystemStatus& status, const Position& 
         oledDisplay.drawString(128, 12, satStr);
     } else {
         oledDisplay.drawString(0, 12, "GPS: Buscando...");
-        // Animación de puntos
-        int dots = (millis() / 500) % 4;
-        String dotsStr = "";
-        for (int i = 0; i < dots; i++) dotsStr += ".";
-        oledDisplay.drawString(0, 24, dotsStr.c_str());
+        
+        // Mostrar número de satélites aunque no haya fix
+        char satInfo[20];
+        snprintf(satInfo, sizeof(satInfo), "Satélites: %d", position.satellites);
+        oledDisplay.drawString(0, 24, satInfo);
+        
+        // Indicador animado de búsqueda
+        int frame = (millis() / 500) % 4;
+        const char* animation[] = {"◐", "◓", "◑", "◒"};
+        oledDisplay.setTextAlignment(TEXT_ALIGN_RIGHT);
+        oledDisplay.drawString(128, 24, animation[frame]);
+        oledDisplay.setTextAlignment(TEXT_ALIGN_LEFT);
     }
     
     // Línea 4: Estado de alerta/geocerca
@@ -408,7 +415,7 @@ void DisplayManager::updateGeofenceInfo(const char* name, GeofenceType type,
     displayState.insideGeofence = inside;
 }
 
-// Barra de progreso simplificada
+// Barra de progreso simplificada sin porcentaje
 void DisplayManager::drawProgressBar(int16_t x, int16_t y, int16_t width, 
                                     int16_t height, uint8_t percentage) {
     // Marco de la barra
@@ -420,12 +427,7 @@ void DisplayManager::drawProgressBar(int16_t x, int16_t y, int16_t width,
         oledDisplay.fillRect(x + 1, y + 1, fillWidth, height - 2);
     }
     
-    // Mostrar porcentaje al lado derecho de la barra
-    char percStr[5];
-    snprintf(percStr, sizeof(percStr), "%d%%", percentage);
-    oledDisplay.setTextAlignment(TEXT_ALIGN_LEFT);
-    oledDisplay.setFont(ArialMT_Plain_10);
-    oledDisplay.drawString(x + width + 5, y - 2, percStr);
+    // Porcentaje removido - Solo mostramos la barra visual
 }
 
 // Funciones auxiliares mejoradas
