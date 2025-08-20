@@ -109,19 +109,34 @@ AlertLevel currentAlert = AlertLevel::SAFE;
 
 void onGeofenceUpdate(const GeofenceUpdate& update) {
     LOG_I("🌐 Actualizando geocerca desde downlink:");
+    LOG_I("  Tipo: %s", update.type == 0 ? "CÍRCULO" : "POLÍGONO");
     LOG_I("  Nombre: %s", update.name);
-    LOG_I("  Centro: %.6f, %.6f", update.centerLat, update.centerLng);
-    LOG_I("  Radio: %.0f metros", update.radius);
+    LOG_I("  Grupo: %s", update.groupId);
     
-    // Actualizar GeofenceManager
-    geofenceManager.setGeofence(update.centerLat, update.centerLng, update.radius, update.name);
+    if (update.type == 0) {
+        // Geocerca circular
+        LOG_I("  Centro: %.6f, %.6f", update.centerLat, update.centerLng);
+        LOG_I("  Radio: %.0f metros", update.radius);
+        
+        geofenceManager.setGeofence(update.centerLat, update.centerLng, 
+                                   update.radius, update.name, update.groupId);
+    } else {
+        // Geocerca poligonal
+        LOG_I("  Puntos: %d", update.pointCount);
+        for (uint8_t i = 0; i < update.pointCount; i++) {
+            LOG_I("    P%d: %.6f, %.6f", i, update.points[i].lat, update.points[i].lng);
+        }
+        
+        geofenceManager.setPolygonGeofence(update.points, update.pointCount, 
+                                          update.name, update.groupId);
+    }
     
     // Actualizar información local para la pantalla
     currentGeofence.name = String(update.name);
+    currentGeofence.type = (GeofenceType)update.type;
     currentGeofence.centerLat = update.centerLat;
     currentGeofence.centerLng = update.centerLng;
     currentGeofence.radius = update.radius;
-    currentGeofence.type = GeofenceType::CIRCLE; // Solo círculos por ahora
     
     // Emitir tono de confirmación
     buzzerManager.playTone(1500, 200, 60);  // Tono de confirmación
@@ -156,9 +171,11 @@ void initializeDefaultPosition() {
 }
 
 void setupGeofence() {
-    // NO configurar geocerca por defecto al inicio
-    // El sistema esperará a recibir una geocerca desde la web o desde memoria
-    LOG_I("🌐 Esperando configuración de geocerca desde ChirpStack...");
+    // ❌ NO configurar geocerca por defecto al inicio (SEGURIDAD)
+    // El sistema debe esperar a recibir una geocerca desde el backend
+    LOG_I("🛡️ Sistema iniciado SIN geocerca por defecto (requisito de seguridad)");
+    LOG_I("🌐 Esperando configuración de geocerca desde ChirpStack backend...");
+    LOG_I("📡 Las geocercas deben ser enviadas vía downlink LoRaWAN");
 }
 
 void configureAlertCallbacks() {
@@ -191,9 +208,10 @@ void configureAlertCallbacks() {
 }
 
 // ============================================================================
-// PAYLOAD PARA CHIRPSTACK
+// PAYLOAD MEJORADO PARA CHIRPSTACK CON ESTADO DEL DISPOSITIVO
 // ============================================================================
 
+// Payload legacy mantenido para compatibilidad
 struct GPSPayload {
     int32_t latitude;   
     int32_t longitude;    
@@ -212,7 +230,6 @@ void createGPSPayload(uint8_t* buffer, size_t* length) {
     payload.longitude = (int32_t)(currentPosition.longitude * 10000000);
     payload.altitude = (uint16_t)currentPosition.altitude;
     
-    // ✅ CORREGIDO: getSatelliteCount() en lugar de getSatellites()
     payload.satellites = gpsManager.getSatelliteCount();
     payload.hdop = (uint8_t)(gpsManager.getHDOP() * 10);
     
@@ -221,11 +238,32 @@ void createGPSPayload(uint8_t* buffer, size_t* length) {
     
     payload.status = 0;
     if (gpsHasFix) payload.status |= (1 << 0);
-    // ✅ CORREGIDO: isInsideGeofence() en lugar de isInside()
     if (geofenceManager.isInsideGeofence(currentPosition)) payload.status |= (1 << 1);
     
     memcpy(buffer, &payload, sizeof(payload));
     *length = sizeof(payload);
+}
+
+// NUEVO: Payload mejorado con estado del dispositivo
+void createDeviceStatusPayloadV2(uint8_t* buffer, size_t* length) {
+    static uint8_t frameCounter = 0;
+    frameCounter++;
+    
+    // Obtener geocerca actual
+    Geofence currentGeofenceData = geofenceManager.getGeofence();
+    bool insideGeofence = geofenceManager.isInsideGeofence(currentPosition);
+    
+    // Usar la función helper desde Types.h
+    GPSPayloadV2 payloadV2;
+    createDeviceStatusPayload(&payloadV2, currentPosition, batteryStatus, 
+                             currentAlert, currentGeofenceData, gpsHasFix, 
+                             insideGeofence, frameCounter);
+    
+    memcpy(buffer, &payloadV2, sizeof(payloadV2));
+    *length = sizeof(payloadV2);
+    
+    LOG_D("📦 Payload V2 creado: %d bytes, frame #%d, grupo: %s", 
+          sizeof(payloadV2), frameCounter, currentGeofenceData.groupId);
 }
 
 // ============================================================================
@@ -339,20 +377,30 @@ void updateDisplay() {
     
     screenManager.lastScreenUpdate = millis();
     
-    // Actualizar información de geocerca
-    if (geofenceManager.isInitialized()) {
-        currentGeofence.currentDistance = geofenceManager.getDistance(currentPosition);
-        currentGeofence.isInside = geofenceManager.isInsideGeofence(currentPosition);
-        
-        // Actualizar información en el DisplayManager
-        displayManager.updateGeofenceInfo(
-            currentGeofence.name.c_str(),
-            currentGeofence.type,
-            currentGeofence.radius,
-            currentGeofence.currentDistance,
-            currentGeofence.isInside
-        );
-    }
+        // Actualizar información de geocerca
+        if (geofenceManager.isInitialized() && geofenceManager.isActive()) {
+            currentGeofence.currentDistance = geofenceManager.getDistance(currentPosition);
+            currentGeofence.isInside = geofenceManager.isInsideGeofence(currentPosition);
+            currentGeofence.type = geofenceManager.getType();
+            
+            // Actualizar información en el DisplayManager
+            displayManager.updateGeofenceInfo(
+                geofenceManager.getName(),
+                currentGeofence.type,
+                geofenceManager.getRadius(),
+                currentGeofence.currentDistance,
+                currentGeofence.isInside
+            );
+        } else {
+            // Sin geocerca activa
+            displayManager.updateGeofenceInfo(
+                "NO ASIGNADA",
+                GeofenceType::CIRCLE,
+                0.0f,
+                0.0f,
+                true
+            );
+        }
     
     // Actualizar contadores
     displayManager.updateCounters(packetCounter, 0); // rxCounter si lo tienes
@@ -370,17 +418,22 @@ void updateDisplay() {
             
         case 2: // Información de Geocerca
             {
-                Geofence gf;
-                gf.centerLat = currentGeofence.centerLat;
-                gf.centerLng = currentGeofence.centerLng;
-                gf.radius = currentGeofence.radius;
-                strncpy(gf.name, currentGeofence.name.c_str(), 15);
-                gf.name[15] = '\0';
-                gf.active = true;
-                
-                displayManager.showGeofenceInfoScreen(gf, 
-                    currentGeofence.currentDistance, 
-                    currentGeofence.isInside);
+                if (geofenceManager.isActive()) {
+                    Geofence gf = geofenceManager.getGeofence();
+                    
+                    displayManager.showGeofenceInfoScreen(gf, 
+                        currentGeofence.currentDistance, 
+                        currentGeofence.isInside);
+                } else {
+                    // Mostrar pantalla de "sin geocerca"
+                    Geofence emptyGf;
+                    strcpy(emptyGf.name, "NO ASIGNADA");
+                    strcpy(emptyGf.groupId, "none");
+                    emptyGf.active = false;
+                    emptyGf.type = GeofenceType::CIRCLE;
+                    
+                    displayManager.showGeofenceInfoScreen(emptyGf, 0.0f, true);
+                }
             }
             break;
             
@@ -599,13 +652,19 @@ void loop() {
     if (loraJoined && gpsHasFix && currentTime - lastLoRaTransmit > txInterval) {
         uint8_t payload[20];
         size_t payloadLength;
-        createGPSPayload(payload, &payloadLength);
         
-        // ✅ CORREGIDO: sendPacket() en lugar de sendRaw()
+        // Usar payload mejorado con estado del dispositivo
+        createDeviceStatusPayloadV2(payload, &payloadLength);
+        
         Result txResult = radioManager.sendPacket(payload, payloadLength, LORAWAN_PORT_GPS);
         if (txResult == Result::SUCCESS) {
             packetCounter++;
             buzzerManager.playTone(1200, 50, 30); // Confirmación suave
+            
+            LOG_I("📡 Uplink #%d enviado: %d bytes [GPS:%s, Geocerca:%s]", 
+                  packetCounter, payloadLength,
+                  gpsHasFix ? "OK" : "NO", 
+                  geofenceManager.isActive() ? geofenceManager.getName() : "NONE");
         }
         
         lastLoRaTransmit = currentTime;

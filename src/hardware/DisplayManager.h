@@ -14,12 +14,7 @@
 // ============================================================================
 // ENUMERACIONES Y TIPOS ADICIONALES
 // ============================================================================
-
-enum class GeofenceType {
-    CIRCLE = 0,
-    POLYGON = 1,
-    RECTANGLE = 2
-};
+// GeofenceType ya está definido en core/Types.h
 
 // ============================================================================
 // CLASE DISPLAY MANAGER
@@ -210,7 +205,7 @@ private:
 // ============================================================================
 
 // Conversión de tipos a strings
-const char* geofenceTypeToString(GeofenceType type);
+// geofenceTypeToString ya está definida en core/Types.h
 const char* screenModeToString(uint8_t mode);
 
 // Formateo de unidades

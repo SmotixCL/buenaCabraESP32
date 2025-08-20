@@ -1,5 +1,4 @@
 #include "GeofenceManager.h"
-#include <Preferences.h>
 
 // ============================================================================
 // CONSTRUCTOR E INICIALIZACIÓN
@@ -32,22 +31,23 @@ Result GeofenceManager::init() {
     
     LOG_I("📍 Inicializando Geofence Manager...");
     
-    // NO cargar geocerca por defecto al inicio
-    // Solo inicializar como vacío
+    // ❌ NO cargar geocerca por defecto al inicio (SEGURIDAD)
+    // Solo inicializar como vacío - sin geocerca activa
     primaryGeofence = Geofence();
     primaryGeofence.active = false;
     active = false;
     
-    // Intentar cargar configuración guardada
-    if (loadConfiguration() == Result::SUCCESS) {
-        LOG_I("📍 Geocerca cargada desde memoria");
-    } else {
-        LOG_I("📍 Sin geocerca previa, esperando configuración");
-        // NO resetear a valores por defecto
-    }
+    // Reset completo de estadísticas
+    violationsCount = 0;
+    lastViolationTime = 0;
+    minDistanceRecorded = 999999.0f;
+    lastInsideState = true;
+    lastAlertLevel = AlertLevel::SAFE;
+    geofenceCount = 0;
     
     initialized = true;
-    LOG_I("✅ Geofence Manager inicializado");
+    LOG_I("✅ Geofence Manager inicializado SIN geocerca por defecto");
+    LOG_I("🛡️ Esperando configuración de geocerca desde backend por seguridad");
     
     return Result::SUCCESS;
 }
@@ -60,8 +60,8 @@ bool GeofenceManager::isInitialized() const {
 // GESTIÓN DE GEOCERCA PRINCIPAL
 // ============================================================================
 
-void GeofenceManager::setGeofence(double centerLat, double centerLng, float radius, const char* name) {
-    Geofence newGeofence(centerLat, centerLng, radius, name);
+void GeofenceManager::setGeofence(double centerLat, double centerLng, float radius, const char* name, const char* groupId) {
+    Geofence newGeofence(centerLat, centerLng, radius, name, groupId);
     setGeofence(newGeofence);
 }
 
@@ -75,21 +75,32 @@ void GeofenceManager::setGeofence(const Geofence& geofence) {
     primaryGeofence.active = true;
     active = true;  // Activar automáticamente
     
-    LOG_I("📍 Geocerca configurada: %s - %.6f,%.6f R=%.1fm", 
-          primaryGeofence.name, primaryGeofence.centerLat, 
-          primaryGeofence.centerLng, primaryGeofence.radius);
+    if (primaryGeofence.type == GeofenceType::CIRCLE) {
+        LOG_I("📍 Geocerca CÍRCULO configurada: %s - %.6f,%.6f R=%.1fm [Grupo: %s]", 
+              primaryGeofence.name, primaryGeofence.centerLat, 
+              primaryGeofence.centerLng, primaryGeofence.radius, primaryGeofence.groupId);
+    } else {
+        LOG_I("📍 Geocerca POLÍGONO configurada: %s - %d puntos [Grupo: %s]", 
+              primaryGeofence.name, primaryGeofence.pointCount, primaryGeofence.groupId);
+    }
     
     // Reset estadísticas
     minDistanceRecorded = 999999.0f;
     lastInsideState = true;
     lastAlertLevel = AlertLevel::SAFE;
     
-    // GUARDAR CONFIGURACIÓN AUTOMÁTICAMENTE
-    if (saveConfiguration() == Result::SUCCESS) {
-        LOG_I("💾 Geocerca guardada en memoria persistente");
-    } else {
-        LOG_W("⚠️ No se pudo guardar la geocerca en memoria");
+    // ❌ NO GUARDAR EN MEMORIA PERSISTENTE POR SEGURIDAD
+    LOG_I("🛡️ Geocerca configurada solo en memoria (no persistente por seguridad)");
+}
+
+void GeofenceManager::setPolygonGeofence(const GeoPoint* points, uint8_t numPoints, const char* name, const char* groupId) {
+    if (!isValidPolygonGeofence(points, numPoints)) {
+        LOG_E("📍 Polígono inválido: %d puntos", numPoints);
+        return;
     }
+    
+    Geofence polygonGeofence(points, numPoints, name, groupId);
+    setGeofence(polygonGeofence);
 }
 
 Geofence GeofenceManager::getGeofence() const {
@@ -118,7 +129,7 @@ bool GeofenceManager::isActive() const {
 }
 
 // ============================================================================
-// VERIFICACIÓN DE POSICIÓN
+// VERIFICACIÓN DE POSICIÓN - CÍRCULOS Y POLÍGONOS
 // ============================================================================
 
 bool GeofenceManager::isInsideGeofence(const Position& position) const {
@@ -129,7 +140,11 @@ bool GeofenceManager::isInsideGeofence(const Position& position) const {
 bool GeofenceManager::isInsideGeofence(double lat, double lng) const {
     if (!isActive()) return true; // Si no está activa, considerar siempre "inside"
     
-    return isPositionInside(primaryGeofence, lat, lng);
+    if (primaryGeofence.type == GeofenceType::CIRCLE) {
+        return isPositionInsideCircle(primaryGeofence, lat, lng);
+    } else {
+        return isPositionInsidePolygon(primaryGeofence, lat, lng);
+    }
 }
 
 float GeofenceManager::getDistance(const Position& position) const {
@@ -140,7 +155,11 @@ float GeofenceManager::getDistance(const Position& position) const {
 float GeofenceManager::getDistance(double lat, double lng) const {
     if (!isActive()) return 0.0f;
     
-    return distanceToGeofenceBoundary(primaryGeofence, lat, lng);
+    if (primaryGeofence.type == GeofenceType::CIRCLE) {
+        return distanceToCircleBoundary(primaryGeofence, lat, lng);
+    } else {
+        return distanceToPolygonBoundaryInternal(primaryGeofence, lat, lng);
+    }
 }
 
 // ============================================================================
@@ -161,6 +180,35 @@ float GeofenceManager::getRadius() const {
 
 const char* GeofenceManager::getName() const {
     return primaryGeofence.name;
+}
+
+const char* GeofenceManager::getGroupId() const {
+    return primaryGeofence.groupId;
+}
+
+GeofenceType GeofenceManager::getType() const {
+    return primaryGeofence.type;
+}
+
+// ============================================================================
+// INFORMACIÓN ESPECÍFICA PARA POLÍGONOS
+// ============================================================================
+
+uint8_t GeofenceManager::getPolygonPointCount() const {
+    return (primaryGeofence.type == GeofenceType::POLYGON) ? primaryGeofence.pointCount : 0;
+}
+
+GeoPoint GeofenceManager::getPolygonPoint(uint8_t index) const {
+    if (primaryGeofence.type == GeofenceType::POLYGON && index < primaryGeofence.pointCount) {
+        return primaryGeofence.points[index];
+    }
+    return GeoPoint();
+}
+
+bool GeofenceManager::hasValidPolygon() const {
+    return (primaryGeofence.type == GeofenceType::POLYGON) && 
+           (primaryGeofence.pointCount >= 3) && 
+           primaryGeofence.active;
 }
 
 // ============================================================================
@@ -203,7 +251,7 @@ float GeofenceManager::getMinDistanceRecorded() const {
 }
 
 // ============================================================================
-// MÚLTIPLES GEOCERCAS
+// MÚLTIPLES GEOCERCAS (Para expansión futura)
 // ============================================================================
 
 Result GeofenceManager::addGeofence(const Geofence& geofence, uint8_t* index) {
@@ -283,8 +331,16 @@ bool GeofenceManager::isInsideAnyGeofence(const Position& position) const {
     
     // Verificar geocercas adicionales
     for (uint8_t i = 0; i < geofenceCount; i++) {
-        if (geofenceActive[i] && isPositionInside(geofences[i], position.latitude, position.longitude)) {
-            return true;
+        if (geofenceActive[i]) {
+            if (geofences[i].type == GeofenceType::CIRCLE) {
+                if (isPositionInsideCircle(geofences[i], position.latitude, position.longitude)) {
+                    return true;
+                }
+            } else {
+                if (isPositionInsidePolygon(geofences[i], position.latitude, position.longitude)) {
+                    return true;
+                }
+            }
         }
     }
     
@@ -299,7 +355,13 @@ float GeofenceManager::getMinDistance(const Position& position) const {
     // Verificar distancia a todas las geocercas
     for (uint8_t i = 0; i < geofenceCount; i++) {
         if (geofenceActive[i]) {
-            float dist = distanceToGeofenceBoundary(geofences[i], position.latitude, position.longitude);
+            float dist;
+            if (geofences[i].type == GeofenceType::CIRCLE) {
+                dist = distanceToCircleBoundary(geofences[i], position.latitude, position.longitude);
+            } else {
+                dist = distanceToPolygonBoundaryInternal(geofences[i], position.latitude, position.longitude);
+            }
+            
             if (dist < minDist) {
                 minDist = dist;
             }
@@ -315,7 +377,13 @@ AlertLevel GeofenceManager::getHighestAlertLevel(const Position& position) const
     // Verificar nivel de alerta de todas las geocercas
     for (uint8_t i = 0; i < geofenceCount; i++) {
         if (geofenceActive[i]) {
-            float dist = distanceToGeofenceBoundary(geofences[i], position.latitude, position.longitude);
+            float dist;
+            if (geofences[i].type == GeofenceType::CIRCLE) {
+                dist = distanceToCircleBoundary(geofences[i], position.latitude, position.longitude);
+            } else {
+                dist = distanceToPolygonBoundaryInternal(geofences[i], position.latitude, position.longitude);
+            }
+            
             AlertLevel level = calculateAlertLevel(dist);
             if (level > highest) {
                 highest = level;
@@ -357,79 +425,13 @@ void GeofenceManager::update(const Position& currentPosition) {
 }
 
 // ============================================================================
-// PERSISTENCIA
+// GESTIÓN DE MEMORIA (Sin persistencia por seguridad)
 // ============================================================================
 
-Result GeofenceManager::saveConfiguration() {
-    Preferences prefs;
-    
-    // Intentar abrir namespace en modo escritura
-    bool opened = prefs.begin("geofence", false);
-    if (!opened) {
-        LOG_E("📍 Error al abrir namespace 'geofence' para escritura");
-        return Result::ERROR_HARDWARE;
-    }
-    
-    // Guardar geocerca principal
-    prefs.putDouble("lat", primaryGeofence.centerLat);
-    prefs.putDouble("lng", primaryGeofence.centerLng);
-    prefs.putFloat("radius", primaryGeofence.radius);
-    prefs.putBool("active", primaryGeofence.active);
-    prefs.putString("name", primaryGeofence.name);
-    
-    // Guardar estadísticas
-    prefs.putUInt("violations", violationsCount);
-    prefs.putFloat("minDist", minDistanceRecorded);
-    
-    prefs.end();
-    LOG_I("📍 Configuración guardada");
-    return Result::SUCCESS;
-}
-
-Result GeofenceManager::loadConfiguration() {
-    // WORKAROUND: Crear namespace si no existe
-    Preferences prefs;
-    
-    // Primero intentar crear/abrir en modo escritura para asegurar que existe
-    if (prefs.begin("geofence", false)) {
-        prefs.end();
-    }
-    
-    // Ahora abrir en modo lectura
-    bool opened = prefs.begin("geofence", true);
-    if (!opened) {
-        LOG_W("📍 No se pudo abrir namespace 'geofence' para lectura");
-        return Result::ERROR_HARDWARE;
-    }
-    
-    // Verificar si hay configuración guardada
-    if (!prefs.isKey("lat")) {
-        prefs.end();
-        LOG_D("📍 No hay geocerca guardada en memoria");
-        return Result::ERROR_INVALID_PARAM;
-    }
-    
-    // Cargar geocerca principal
-    primaryGeofence.centerLat = prefs.getDouble("lat", -33.4489);
-    primaryGeofence.centerLng = prefs.getDouble("lng", -70.6693);
-    primaryGeofence.radius = prefs.getFloat("radius", DEFAULT_GEOFENCE_RADIUS);
-    primaryGeofence.active = prefs.getBool("active", true);
-    strcpy(primaryGeofence.name, prefs.getString("name", "Principal").c_str());
-    
-    // Cargar estadísticas
-    violationsCount = prefs.getUInt("violations", 0);
-    minDistanceRecorded = prefs.getFloat("minDist", 999999.0f);
-    
-    prefs.end();
-    LOG_I("📍 Configuración cargada");
-    return Result::SUCCESS;
-}
-
-void GeofenceManager::resetToDefaults() {
-    // Configurar geocerca por defecto (Santiago, Chile)
-    primaryGeofence = Geofence(-33.4489, -70.6693, DEFAULT_GEOFENCE_RADIUS, "Santiago");
-    primaryGeofence.active = true;
-    active = true;
+void GeofenceManager::clearCurrentGeofence() {
+    primaryGeofence = Geofence();
+    primaryGeofence.active = false;
+    active = false;
     
     // Reset estadísticas
     violationsCount = 0;
@@ -437,13 +439,29 @@ void GeofenceManager::resetToDefaults() {
     minDistanceRecorded = 999999.0f;
     lastInsideState = true;
     lastAlertLevel = AlertLevel::SAFE;
+    
+    LOG_I("🗑️ Geocerca eliminada de memoria");
+}
+
+void GeofenceManager::resetToDefaults() {
+    // ❌ NO configurar geocerca por defecto (SEGURIDAD)
+    primaryGeofence = Geofence();
+    primaryGeofence.active = false;
+    active = false;
+    
+    // Reset completo de estadísticas
+    violationsCount = 0;
+    lastViolationTime = 0;
+    minDistanceRecorded = 999999.0f;
+    lastInsideState = true;
+    lastAlertLevel = AlertLevel::SAFE;
     geofenceCount = 0;
     
-    LOG_I("📍 Configuración reseteada a valores por defecto");
+    LOG_I("🔄 Sistema reseteado - SIN geocerca por defecto por seguridad");
 }
 
 // ============================================================================
-// UTILIDADES DE CÁLCULO
+// UTILIDADES DE CÁLCULO ESTÁTICAS
 // ============================================================================
 
 float GeofenceManager::calculateDistance(double lat1, double lng1, double lat2, double lng2) {
@@ -462,6 +480,93 @@ float GeofenceManager::calculateDistance(double lat1, double lng1, double lat2, 
 
 bool GeofenceManager::isValidCoordinate(double lat, double lng) {
     return lat >= -90.0 && lat <= 90.0 && lng >= -180.0 && lng <= 180.0;
+}
+
+// ============================================================================
+// ALGORITMOS PARA POLÍGONOS - IMPLEMENTACIÓN RAY-CASTING
+// ============================================================================
+
+bool GeofenceManager::isPointInPolygon(double lat, double lng, const GeoPoint* points, uint8_t numPoints) {
+    if (numPoints < 3) return false;
+    
+    bool inside = false;
+    
+    // Algoritmo Ray-casting
+    for (uint8_t i = 0, j = numPoints - 1; i < numPoints; j = i++) {
+        if (((points[i].lat > lat) != (points[j].lat > lat)) &&
+            (lng < (points[j].lng - points[i].lng) * (lat - points[i].lat) / (points[j].lat - points[i].lat) + points[i].lng)) {
+            inside = !inside;
+        }
+    }
+    
+    return inside;
+}
+
+float GeofenceManager::distanceToPolygonBoundary(double lat, double lng, const GeoPoint* points, uint8_t numPoints) {
+    if (numPoints < 3) return 999999.0f;
+    
+    float minDistance = 999999.0f;
+    
+    // Calcular distancia a cada segmento del polígono
+    for (uint8_t i = 0; i < numPoints; i++) {
+        uint8_t j = (i + 1) % numPoints;
+        float segmentDistance = distanceToLineSegment(lat, lng, points[i], points[j]);
+        
+        if (segmentDistance < minDistance) {
+            minDistance = segmentDistance;
+        }
+    }
+    
+    // Si está dentro del polígono, la distancia es negativa
+    if (isPointInPolygon(lat, lng, points, numPoints)) {
+        minDistance = -minDistance;
+    }
+    
+    return minDistance;
+}
+
+float GeofenceManager::distanceToLineSegment(double lat, double lng, const GeoPoint& p1, const GeoPoint& p2) {
+    // Convertir a metros usando proyección plana local (válida para distancias cortas)
+    double lat0 = (p1.lat + p2.lat) / 2.0;
+    double x = (lng - p1.lng) * cos(lat0 * DEG_TO_RAD) * 111320.0;
+    double y = (lat - p1.lat) * 110540.0;
+    double x1 = (p1.lng - p1.lng) * cos(lat0 * DEG_TO_RAD) * 111320.0; // = 0
+    double y1 = (p1.lat - p1.lat) * 110540.0; // = 0
+    double x2 = (p2.lng - p1.lng) * cos(lat0 * DEG_TO_RAD) * 111320.0;
+    double y2 = (p2.lat - p1.lat) * 110540.0;
+    
+    double A = x - x1;
+    double B = y - y1;
+    double C = x2 - x1;
+    double D = y2 - y1;
+    
+    double dot = A * C + B * D;
+    double lenSq = C * C + D * D;
+    
+    if (lenSq < 1e-6) {
+        // Segmento degenerado
+        return sqrt(A * A + B * B);
+    }
+    
+    double param = dot / lenSq;
+    
+    double xx, yy;
+    
+    if (param < 0) {
+        xx = x1;
+        yy = y1;
+    } else if (param > 1) {
+        xx = x2;
+        yy = y2;
+    } else {
+        xx = x1 + param * C;
+        yy = y1 + param * D;
+    }
+    
+    double dx = x - xx;
+    double dy = y - yy;
+    
+    return sqrt(dx * dx + dy * dy);
 }
 
 // ============================================================================
@@ -495,7 +600,8 @@ void GeofenceManager::checkViolations(const Position& position) {
         lastViolationTime = millis();
         
         float distance = getDistance(position);
-        LOG_W("📍 Violación de geocerca #%d - Distancia: %.1fm", violationsCount, distance);
+        LOG_W("📍 Violación de geocerca #%d - Distancia: %.1fm [%s]", 
+              violationsCount, distance, geofenceTypeToString(primaryGeofence.type));
         
         if (violationCallback) {
             violationCallback(primaryGeofence, distance, currentLevel);
@@ -514,12 +620,49 @@ void GeofenceManager::triggerCallbacks(const Position& position) {
 }
 
 bool GeofenceManager::isValidGeofence(const Geofence& geofence) const {
-    return isValidCoordinate(geofence.centerLat, geofence.centerLng) &&
-           geofence.radius >= MIN_GEOFENCE_RADIUS &&
-           geofence.radius <= MAX_GEOFENCE_RADIUS;
+    if (!isValidCoordinate(geofence.centerLat, geofence.centerLng)) {
+        return false;
+    }
+    
+    if (geofence.type == GeofenceType::CIRCLE) {
+        return geofence.radius >= MIN_GEOFENCE_RADIUS && geofence.radius <= MAX_GEOFENCE_RADIUS;
+    } else {
+        return isValidPolygonGeofence(geofence.points, geofence.pointCount);
+    }
 }
 
-float GeofenceManager::distanceToGeofenceBoundary(const Geofence& geofence, double lat, double lng) const {
+bool GeofenceManager::isValidPolygonGeofence(const GeoPoint* points, uint8_t numPoints) const {
+    if (numPoints < 3 || numPoints > Geofence::MAX_POLYGON_POINTS) {
+        return false;
+    }
+    
+    // Verificar que todos los puntos sean coordenadas válidas
+    for (uint8_t i = 0; i < numPoints; i++) {
+        if (!isValidCoordinate(points[i].lat, points[i].lng)) {
+            return false;
+        }
+    }
+    
+    // Verificar que el polígono no sea degenerado (área > 0)
+    // Cálculo simplificado del área usando fórmula del zapato
+    double area = 0.0;
+    for (uint8_t i = 0; i < numPoints; i++) {
+        uint8_t j = (i + 1) % numPoints;
+        area += (points[j].lng - points[i].lng) * (points[j].lat + points[i].lat);
+    }
+    area = abs(area) / 2.0;
+    
+    // Convertir aproximadamente a metros cuadrados
+    area *= 111320.0 * 110540.0; // Aproximación muy burda
+    
+    return area > MIN_POLYGON_AREA;
+}
+
+// ============================================================================
+// UTILIDADES INTERNAS - CÍRCULOS
+// ============================================================================
+
+float GeofenceManager::distanceToCircleBoundary(const Geofence& geofence, double lat, double lng) const {
     // Calcular distancia al centro
     float distanceToCenter = calculateDistance(geofence.centerLat, geofence.centerLng, lat, lng);
     
@@ -527,9 +670,29 @@ float GeofenceManager::distanceToGeofenceBoundary(const Geofence& geofence, doub
     return distanceToCenter - geofence.radius;
 }
 
-bool GeofenceManager::isPositionInside(const Geofence& geofence, double lat, double lng) const {
+bool GeofenceManager::isPositionInsideCircle(const Geofence& geofence, double lat, double lng) const {
     if (!geofence.active) return true;
     
     float distance = calculateDistance(geofence.centerLat, geofence.centerLng, lat, lng);
     return distance <= geofence.radius;
+}
+
+// ============================================================================
+// UTILIDADES INTERNAS - POLÍGONOS
+// ============================================================================
+
+float GeofenceManager::distanceToPolygonBoundaryInternal(const Geofence& geofence, double lat, double lng) const {
+    if (geofence.type != GeofenceType::POLYGON || geofence.pointCount < 3) {
+        return 999999.0f;
+    }
+    
+    return distanceToPolygonBoundary(lat, lng, geofence.points, geofence.pointCount);
+}
+
+bool GeofenceManager::isPositionInsidePolygon(const Geofence& geofence, double lat, double lng) const {
+    if (!geofence.active || geofence.type != GeofenceType::POLYGON) {
+        return true;
+    }
+    
+    return isPointInPolygon(lat, lng, geofence.points, geofence.pointCount);
 }

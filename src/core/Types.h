@@ -29,27 +29,96 @@ struct Position {
 };
 
 // ============================================================================
-// GEOCERCA
+// GEOCERCA - SOPORTA CÍRCULOS Y POLÍGONOS
 // ============================================================================
+
+// Tipos de geocerca
+enum class GeofenceType : uint8_t {
+    CIRCLE = 0,
+    POLYGON = 1
+};
+
+// Punto geográfico para polígonos
+struct GeoPoint {
+    double lat;
+    double lng;
+    
+    GeoPoint() : lat(0.0), lng(0.0) {}
+    GeoPoint(double latitude, double longitude) : lat(latitude), lng(longitude) {}
+};
+
+// Estructura principal de geocerca
 struct Geofence {
+    GeofenceType type;          // Tipo: círculo o polígono
+    bool active;                // Si está activa
+    uint32_t createdAt;         // Timestamp de creación
+    char name[16];              // Nombre de la geocerca
+    char groupId[16];           // ID del grupo asignado
+    
+    // Para círculos
     double centerLat;
     double centerLng;
-    float radius;           // Radio en metros
-    bool active;            // Si está activa
-    uint32_t createdAt;     // Timestamp de creación
-    char name[16];          // Nombre de la geocerca
+    float radius;               // Radio en metros
+    
+    // Para polígonos
+    static const uint8_t MAX_POLYGON_POINTS = 10;
+    GeoPoint points[MAX_POLYGON_POINTS];
+    uint8_t pointCount;         // Número de puntos del polígono
     
     Geofence() :
-        centerLat(0.0), centerLng(0.0), radius(50.0f), 
-        active(false), createdAt(0) {
+        type(GeofenceType::CIRCLE),
+        active(false), createdAt(0),
+        centerLat(0.0), centerLng(0.0), radius(50.0f),
+        pointCount(0) {
         strcpy(name, "Default");
+        strcpy(groupId, "none");
+        // Inicializar array de puntos
+        for(uint8_t i = 0; i < MAX_POLYGON_POINTS; i++) {
+            points[i] = GeoPoint();
+        }
     }
         
-    Geofence(double lat, double lng, float r, const char* n = "Geofence") :
-        centerLat(lat), centerLng(lng), radius(r), 
-        active(true), createdAt(millis()) {
+    // Constructor para círculo
+    Geofence(double lat, double lng, float r, const char* n = "Geofence", const char* group = "none") :
+        type(GeofenceType::CIRCLE),
+        active(true), createdAt(millis()),
+        centerLat(lat), centerLng(lng), radius(r),
+        pointCount(0) {
         strncpy(name, n, 15);
         name[15] = '\0';
+        strncpy(groupId, group, 15);
+        groupId[15] = '\0';
+        for(uint8_t i = 0; i < MAX_POLYGON_POINTS; i++) {
+            points[i] = GeoPoint();
+        }
+    }
+    
+    // Constructor para polígono
+    Geofence(const GeoPoint* polygonPoints, uint8_t numPoints, const char* n = "Polygon", const char* group = "none") :
+        type(GeofenceType::POLYGON),
+        active(true), createdAt(millis()),
+        centerLat(0.0), centerLng(0.0), radius(0.0f),
+        pointCount(numPoints > MAX_POLYGON_POINTS ? MAX_POLYGON_POINTS : numPoints) {
+        strncpy(name, n, 15);
+        name[15] = '\0';
+        strncpy(groupId, group, 15);
+        groupId[15] = '\0';
+        
+        // Copiar puntos del polígono
+        for(uint8_t i = 0; i < pointCount; i++) {
+            points[i] = polygonPoints[i];
+        }
+        
+        // Calcular centro aproximado del polígono
+        if(pointCount > 0) {
+            double sumLat = 0.0, sumLng = 0.0;
+            for(uint8_t i = 0; i < pointCount; i++) {
+                sumLat += points[i].lat;
+                sumLng += points[i].lng;
+            }
+            centerLat = sumLat / pointCount;
+            centerLng = sumLng / pointCount;
+        }
     }
 };
 
@@ -91,7 +160,7 @@ struct SystemStatus {
 };
 
 // ============================================================================
-// PAQUETE DE DATOS LORAWAN
+// PAQUETE DE DATOS LORAWAN MEJORADO
 // ============================================================================
 struct LoRaWANPacket {
     uint16_t sequenceNumber;
@@ -102,11 +171,36 @@ struct LoRaWANPacket {
     uint8_t payloadSize;
     uint8_t payload[32];        // Payload LoRaWAN
     
+    // NUEVO: Estado del dispositivo
+    char currentGroupId[16];    // Grupo asignado actualmente
+    bool hasActiveGeofence;     // Si tiene geocerca activa
+    GeofenceType geofenceType;  // Tipo de geocerca activa
+    uint8_t deviceStatus;       // Bits de estado del dispositivo
+    
     LoRaWANPacket() :
-        sequenceNumber(0), alertLevel(0), timestamp(0), payloadSize(0) {
+        sequenceNumber(0), alertLevel(0), timestamp(0), payloadSize(0),
+        hasActiveGeofence(false), geofenceType(GeofenceType::CIRCLE), deviceStatus(0) {
         memset(payload, 0, sizeof(payload));
+        strcpy(currentGroupId, "none");
     }
 };
+
+// ============================================================================
+// PAYLOAD OPTIMIZADO PARA UPLINKS (11 bytes total)
+// ============================================================================
+struct GPSPayloadV2 {
+    int32_t latitude;       // 4 bytes - lat * 10^7
+    int32_t longitude;      // 4 bytes - lng * 10^7
+    uint16_t altitude;      // 2 bytes - metros
+    uint8_t satellites;     // 1 byte - número de satélites
+    uint8_t hdop;           // 1 byte - HDOP * 10
+    uint8_t battery;        // 1 byte - porcentaje batería
+    uint8_t alert;          // 1 byte - nivel de alerta
+    uint8_t status;         // 1 byte - flags de estado
+    uint8_t groupIdHash;    // 1 byte - hash del grupo asignado
+    uint8_t geofenceFlags;  // 1 byte - tipo geocerca + activa + dentro
+    uint8_t frameCounter;   // 1 byte - contador para tracking
+} __attribute__((packed));
 
 // ============================================================================
 // CONFIGURACIÓN DE ALERTA
@@ -174,6 +268,17 @@ enum class Result : uint8_t {
 };
 
 // ============================================================================
+// FLAGS PARA ESTADO DEL DISPOSITIVO
+// ============================================================================
+#define GEOFENCE_TYPE_MASK      0x03  // bits 0-1: tipo (0=círculo, 1=polígono)
+#define GEOFENCE_ACTIVE_FLAG    0x04  // bit 2: geocerca activa
+#define GEOFENCE_INSIDE_FLAG    0x08  // bit 3: dentro de geocerca
+#define GEOFENCE_VIOLATION_FLAG 0x10  // bit 4: violación detectada
+#define DEVICE_GPS_FIX_FLAG     0x20  // bit 5: GPS fix válido
+#define DEVICE_BATTERY_LOW_FLAG 0x40  // bit 6: batería baja
+#define DEVICE_ERROR_FLAG       0x80  // bit 7: error del sistema
+
+// ============================================================================
 // FUNCIONES DE UTILIDAD PARA TIPOS
 // ============================================================================
 
@@ -187,6 +292,24 @@ inline const char* alertLevelToString(AlertLevel level) {
         case AlertLevel::EMERGENCY: return "EMERGENCY";
         default:                    return "UNKNOWN";
     }
+}
+
+// Convertir GeofenceType a string
+inline const char* geofenceTypeToString(GeofenceType type) {
+    switch (type) {
+        case GeofenceType::CIRCLE:  return "CIRCLE";
+        case GeofenceType::POLYGON: return "POLYGON";
+        default:                    return "UNKNOWN";
+    }
+}
+
+// Hash simple para nombres de grupo (8 bits)
+inline uint8_t calculateGroupHash(const char* groupId) {
+    uint8_t hash = 0;
+    for (int i = 0; groupId[i] != '\0' && i < 15; i++) {
+        hash = (hash * 31 + groupId[i]) & 0xFF;
+    }
+    return hash;
 }
 
 // Convertir Result a string
@@ -221,4 +344,36 @@ inline uint8_t calculateBatteryPercentage(float voltage) {
     if (voltage >= 3.4f) return 20 + (voltage - 3.4f) * 100;  // 20-40%
     if (voltage >= 3.0f) return 0 + (voltage - 3.0f) * 50;    // 0-20%
     return 0;
+}
+
+// Crear payload optimizado con estado del dispositivo
+inline void createDeviceStatusPayload(GPSPayloadV2* payload, const Position& pos, 
+                                     const BatteryStatus& battery, AlertLevel alert,
+                                     const Geofence& geofence, bool gpsValid, 
+                                     bool insideGeofence, uint8_t frameCount) {
+    payload->latitude = (int32_t)(pos.latitude * 10000000);
+    payload->longitude = (int32_t)(pos.longitude * 10000000);
+    payload->altitude = (uint16_t)pos.altitude;
+    payload->satellites = pos.satellites;
+    payload->hdop = (uint8_t)(pos.accuracy * 10); // Usar accuracy como HDOP
+    payload->battery = battery.percentage;
+    payload->alert = (uint8_t)alert;
+    
+    // Flags de estado del dispositivo
+    payload->status = 0;
+    if (gpsValid) payload->status |= DEVICE_GPS_FIX_FLAG;
+    if (battery.low) payload->status |= DEVICE_BATTERY_LOW_FLAG;
+    if (insideGeofence) payload->status |= GEOFENCE_INSIDE_FLAG;
+    
+    // Hash del grupo
+    payload->groupIdHash = calculateGroupHash(geofence.groupId);
+    
+    // Flags de geocerca
+    payload->geofenceFlags = 0;
+    payload->geofenceFlags |= (uint8_t)geofence.type & GEOFENCE_TYPE_MASK;
+    if (geofence.active) payload->geofenceFlags |= GEOFENCE_ACTIVE_FLAG;
+    if (insideGeofence) payload->geofenceFlags |= GEOFENCE_INSIDE_FLAG;
+    
+    // Frame counter para tracking
+    payload->frameCounter = frameCount;
 }

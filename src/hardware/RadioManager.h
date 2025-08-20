@@ -15,12 +15,30 @@
  * ============================================================================
  */
 
+// Estructura mejorada para soporte de polígonos
 struct GeofenceUpdate {
+    uint8_t type;           // 0=círculo, 1=polígono
+    char name[16];          // Nombre de la geocerca
+    char groupId[16];       // ID del grupo asignado
+    
+    // Para círculos
     double centerLat;
     double centerLng;
     float radius;
-    uint8_t type;  // 0=círculo, 1=polígono
-    char name[16]; // Nombre de la geocerca
+    
+    // Para polígonos
+    uint8_t pointCount;     // Número de puntos del polígono
+    GeoPoint points[10];    // Array de puntos (máximo 10)
+    
+    GeofenceUpdate() :
+        type(0), pointCount(0),
+        centerLat(0.0), centerLng(0.0), radius(0.0f) {
+        strcpy(name, "Unknown");
+        strcpy(groupId, "none");
+        for(uint8_t i = 0; i < 10; i++) {
+            points[i] = GeoPoint();
+        }
+    }
 };
 
 typedef void (*GeofenceUpdateCallback)(const GeofenceUpdate& update);
@@ -117,12 +135,18 @@ private:
     bool sleeping;
     RadioState currentState;
     
-    // Estadísticas
+    // Estadísticas con contadores corregidos
     uint16_t packetsSent;
     uint16_t packetsReceived;
     uint16_t packetsLost;
     float lastRSSI;
     float lastSNR;
+    
+    // NUEVO: Contadores de frame para verificación
+    uint16_t uplinkFrameCounter;
+    uint16_t downlinkFrameCounter;
+    uint32_t lastUplinkTime;
+    uint32_t lastDownlinkTime;
     
     // Configuración LoRaWAN
     uint8_t currentDataRate;
@@ -161,7 +185,13 @@ private:
     // Utilidades LoRaWAN
     size_t createPositionPayload(uint8_t* buffer, const Position& position, AlertLevel alertLevel);
     size_t createBatteryPayload(uint8_t* buffer, const BatteryStatus& battery);
-    bool isValidPosition(const Position& position); // *** AGREGADO: Función faltante ***
+    bool isValidPosition(const Position& position);
+    
+    // NUEVO: Payload mejorado con estado del dispositivo
+    size_t createDeviceStatusPayload(uint8_t* buffer, const Position& position, 
+                                    const BatteryStatus& battery, AlertLevel alertLevel,
+                                    const Geofence& geofence, bool gpsValid, 
+                                    bool insideGeofence, uint8_t frameCount);
     
     // Procesamiento de downlinks
     void processDownlink(const uint8_t* data, size_t length, uint8_t port);
@@ -169,6 +199,10 @@ private:
     void parseAlertCommand(const uint8_t* data, size_t length);
     void parseConfigCommand(const uint8_t* data, size_t length);
     void parseGeofenceCommand(const uint8_t* data, size_t length);
+    
+    // NUEVO: Decodificación específica para polígonos
+    void parseCircleGeofence(const uint8_t* data, size_t length);
+    void parsePolygonGeofence(const uint8_t* data, size_t length);
     
     // Gestión de errores
     void handleRadioError(int16_t errorCode);
@@ -198,10 +232,15 @@ struct LoRaWANConfig {
     bool adrEnabled;
     bool confirmedUplinks;
     
+    // NUEVO: Frame counters para tracking
+    uint16_t upFrameCounter;
+    uint16_t downFrameCounter;
+    
     LoRaWANConfig() :
         useOTAA(true), region(2), subBand(1), // AU915 sub-banda 1 para Chile
         defaultDataRate(0), defaultTxPower(20),
-        adrEnabled(true), confirmedUplinks(false) {
+        adrEnabled(true), confirmedUplinks(false),
+        upFrameCounter(0), downFrameCounter(0) {
         memset(devEUI, 0, 8);
         memset(appEUI, 0, 8);
         memset(appKey, 0, 16);

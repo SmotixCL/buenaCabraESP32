@@ -23,6 +23,8 @@ RadioManager::RadioManager(uint8_t nss, uint8_t dio1, uint8_t rst, uint8_t busy)
     currentState(STATE_IDLE),
     packetsSent(0), packetsReceived(0), packetsLost(0),
     lastRSSI(0), lastSNR(0),
+    uplinkFrameCounter(0), downlinkFrameCounter(0),
+    lastUplinkTime(0), lastDownlinkTime(0),
     currentDataRate(0), currentTxPower(20),
     adrEnabled(true), confirmedUplinks(false),
     downlinkCallback(nullptr), joinCallback(nullptr), txCallback(nullptr),
@@ -290,29 +292,35 @@ Result RadioManager::sendPacket(const uint8_t* data, size_t length, uint8_t port
         LOG_I("📡 Packet #%d enviado - RSSI: %.1fdBm, SNR: %.1fdB", 
               packetsSent, lastRSSI, lastSNR);
         
-        // ✅ GUARDAR FRAME COUNTERS DESPUÉS DE TX EXITOSO
+        // ✅ ACTUALIZAR FRAME COUNTERS CORREGIDOS
+        uplinkFrameCounter++;
+        lastUplinkTime = millis();
+        
         // Guardar cada 10 transmisiones para no desgastar la flash
         if (packetsSent % 10 == 0) {
             Preferences prefs;
             if (prefs.begin("lorawan", false)) {
-                // Obtener frame counters actuales si RadioLib lo permite
-                // uint32_t fcntUp = lorawan.getFCntUp();
-                // prefs.putULong("fcntup", fcntUp);
-                prefs.putULong("fcntup", packetsSent); // Usar contador de paquetes como aproximación
+                prefs.putUShort("upFrameCount", uplinkFrameCounter);
+                prefs.putULong("lastUpTime", lastUplinkTime);
                 prefs.end();
-                LOG_D("🔐 Frame counters guardados");
+                LOG_D("🔐 Frame counters actualizados: Up=%d", uplinkFrameCounter);
             }
         }
         
         // Verificar si hay downlink
         if (downlinkSize > 0) {
+            // ✅ ACTUALIZAR CONTADORES DE DOWNLINK
+            downlinkFrameCounter++;
+            lastDownlinkTime = millis();
+            
             // Copiar downlink al buffer de recepción
             memcpy(rxBuffer, downlinkPayload, downlinkSize);
             downlinkLength = downlinkSize;
             downlinkPort = downlinkDetails.fPort;
             pendingDownlink = true;
             
-            LOG_I("📡 Downlink recibido: %d bytes en puerto %d", downlinkSize, downlinkDetails.fPort);
+            LOG_I("📡 Downlink #%d recibido: %d bytes en puerto %d", 
+                  downlinkFrameCounter, downlinkSize, downlinkDetails.fPort);
             
             // Procesar downlink inmediatamente
             processDownlink(downlinkPayload, downlinkSize, downlinkDetails.fPort);
@@ -559,13 +567,7 @@ void RadioManager::handleDio1Interrupt() {
 // ============================================================================
 
 size_t RadioManager::createPositionPayload(uint8_t* buffer, const Position& position, AlertLevel alertLevel) {
-    // Formato de payload optimizado (12 bytes):
-    // Lat: 4 bytes (float)
-    // Lng: 4 bytes (float) 
-    // Alt: 2 bytes (int16, metros)
-    // AlertLevel: 1 byte
-    // Battery %: 1 byte
-    
+    // Formato de payload LEGACY (12 bytes) - mantenido para compatibilidad
     size_t index = 0;
     
     // Latitud (4 bytes)
@@ -590,6 +592,47 @@ size_t RadioManager::createPositionPayload(uint8_t* buffer, const Position& posi
     buffer[index++] = 0;
     
     return index;
+}
+
+// NUEVO: Payload mejorado con estado del dispositivo
+size_t RadioManager::createDeviceStatusPayload(uint8_t* buffer, const Position& position, 
+                                              const BatteryStatus& battery, AlertLevel alertLevel,
+                                              const Geofence& geofence, bool gpsValid, 
+                                              bool insideGeofence, uint8_t frameCount) {
+    // Usar la estructura optimizada GPSPayloadV2 (11 bytes)
+    GPSPayloadV2 payload;
+    
+    // Llenar la estructura directamente
+    payload.latitude = (int32_t)(position.latitude * 10000000);
+    payload.longitude = (int32_t)(position.longitude * 10000000);
+    payload.altitude = (uint16_t)position.altitude;
+    payload.satellites = position.satellites;
+    payload.hdop = (uint8_t)(position.accuracy * 10); // Usar accuracy como HDOP
+    payload.battery = battery.percentage;
+    payload.alert = (uint8_t)alertLevel;
+    
+    // Flags de estado del dispositivo
+    payload.status = 0;
+    if (gpsValid) payload.status |= DEVICE_GPS_FIX_FLAG;
+    if (battery.low) payload.status |= DEVICE_BATTERY_LOW_FLAG;
+    if (insideGeofence) payload.status |= GEOFENCE_INSIDE_FLAG;
+    
+    // Hash del grupo
+    payload.groupIdHash = calculateGroupHash(geofence.groupId);
+    
+    // Flags de geocerca
+    payload.geofenceFlags = 0;
+    payload.geofenceFlags |= (uint8_t)geofence.type & GEOFENCE_TYPE_MASK;
+    if (geofence.active) payload.geofenceFlags |= GEOFENCE_ACTIVE_FLAG;
+    if (insideGeofence) payload.geofenceFlags |= GEOFENCE_INSIDE_FLAG;
+    
+    // Frame counter para tracking
+    payload.frameCounter = frameCount;
+    
+    // Copiar al buffer
+    memcpy(buffer, &payload, sizeof(payload));
+    
+    return sizeof(payload);
 }
 
 size_t RadioManager::createBatteryPayload(uint8_t* buffer, const BatteryStatus& battery) {
@@ -721,48 +764,150 @@ void RadioManager::parseConfigCommand(const uint8_t* data, size_t length) {
 }
 
 void RadioManager::parseGeofenceCommand(const uint8_t* data, size_t length) {
-    // Formato esperado: [tipo][lat(4)][lng(4)][radio(2)] = 11 bytes mínimo
-    if (length < 11) {
-        LOG_W("📡 Comando de geocerca muy corto: %d bytes", length);
+    if (length < 1) {
+        LOG_W("📡 Comando de geocerca vacío");
         return;
     }
     
     uint8_t geofenceType = data[0];
+    
+    LOG_I("🌐 GEOCERCA RECIBIDA vía LoRaWAN - Tipo: %d", geofenceType);
+    
+    if (geofenceType == 0) {
+        // Círculo
+        parseCircleGeofence(data, length);
+    } else if (geofenceType == 1) {
+        // Polígono
+        parsePolygonGeofence(data, length);
+    } else {
+        LOG_W("⚠️ Tipo de geocerca desconocido: %d", geofenceType);
+    }
+}
+
+void RadioManager::parseCircleGeofence(const uint8_t* data, size_t length) {
+    // Formato: [tipo(1)][lat(4)][lng(4)][radio(2)][groupId(N)] = 11+ bytes
+    if (length < 11) {
+        LOG_W("📡 Comando de geocerca circular muy corto: %d bytes", length);
+        return;
+    }
     
     // Extraer coordenadas (en formato float little-endian)
     float lat, lng;
     memcpy(&lat, &data[1], 4);
     memcpy(&lng, &data[5], 4);
     
-    // Extraer radio (2 bytes, uint16)
-    uint16_t radius = (data[9] << 8) | data[10];
+    // Extraer radio (2 bytes, uint16 little-endian)
+    uint16_t radius = data[9] | (data[10] << 8);
     
-    LOG_I("🌐 GEOCERCA RECIBIDA vía LoRaWAN:");
-    LOG_I("  Tipo: %d", geofenceType);
+    // Extraer groupId si está presente
+    char groupId[16] = "backend";
+    if (length > 11) {
+        size_t groupIdLen = min((size_t)15, length - 11);
+        memcpy(groupId, &data[11], groupIdLen);
+        groupId[groupIdLen] = '\0';
+    }
+    
+    LOG_I("🔴 GEOCERCA CÍRCULO:");
     LOG_I("  Centro: %.6f, %.6f", lat, lng);
     LOG_I("  Radio: %d metros", radius);
+    LOG_I("  Grupo: %s", groupId);
     
-    // 🔥 ACTUALIZACIÓN CRÍTICA: Llamar al callback para actualizar la geocerca
+    // Llamar al callback para actualizar la geocerca
     if (geofenceUpdateCallback) {
-        // Crear estructura de geocerca
         GeofenceUpdate update;
+        update.type = 0; // Círculo
         update.centerLat = lat;
         update.centerLng = lng;
         update.radius = (float)radius;
-        update.type = geofenceType;
-        strncpy(update.name, "Backend", sizeof(update.name) - 1);
+        update.pointCount = 0;
+        strncpy(update.name, "Circle", sizeof(update.name) - 1);
+        strncpy(update.groupId, groupId, sizeof(update.groupId) - 1);
         update.name[sizeof(update.name) - 1] = '\0';
+        update.groupId[sizeof(update.groupId) - 1] = '\0';
         
-        // Llamar al callback para actualizar la geocerca en el sistema principal
         geofenceUpdateCallback(update);
-        
-        LOG_I("✅ Geocerca actualizada en sistema principal");
+        LOG_I("✅ Geocerca circular actualizada");
     } else {
         LOG_W("⚠️ Callback de geocerca no configurado");
     }
+}
+
+void RadioManager::parsePolygonGeofence(const uint8_t* data, size_t length) {
+    // Formato: [tipo(1)][numPuntos(1)][lat1(4)][lng1(4)][lat2(4)][lng2(4)]...[groupId(N)]
+    if (length < 3) {
+        LOG_W("📡 Comando de geocerca poligonal muy corto: %d bytes", length);
+        return;
+    }
     
-    // Emitir sonido de confirmación
-    LOG_I("🎵 Tono de confirmación de geocerca programado");
+    uint8_t numPoints = data[1];
+    
+    if (numPoints < 3 || numPoints > 10) {
+        LOG_W("⚠️ Número de puntos inválido: %d", numPoints);
+        return;
+    }
+    
+    size_t expectedLength = 2 + (numPoints * 8); // tipo + numPuntos + (lat+lng)*numPuntos
+    if (length < expectedLength) {
+        LOG_W("📡 Comando de polígono incompleto: %d bytes, esperado %d", length, expectedLength);
+        return;
+    }
+    
+    LOG_I("🔷 GEOCERCA POLÍGONO: %d puntos", numPoints);
+    
+    // Extraer puntos del polígono
+    GeoPoint points[10];
+    size_t dataIndex = 2;
+    
+    for (uint8_t i = 0; i < numPoints; i++) {
+        float lat, lng;
+        memcpy(&lat, &data[dataIndex], 4);
+        memcpy(&lng, &data[dataIndex + 4], 4);
+        
+        points[i] = GeoPoint(lat, lng);
+        dataIndex += 8;
+        
+        LOG_I("  Punto %d: %.6f, %.6f", i, lat, lng);
+    }
+    
+    // Extraer groupId si está presente
+    char groupId[16] = "backend";
+    if (length > expectedLength) {
+        size_t groupIdLen = min((size_t)15, length - expectedLength);
+        memcpy(groupId, &data[expectedLength], groupIdLen);
+        groupId[groupIdLen] = '\0';
+    }
+    
+    LOG_I("  Grupo: %s", groupId);
+    
+    // Llamar al callback para actualizar la geocerca
+    if (geofenceUpdateCallback) {
+        GeofenceUpdate update;
+        update.type = 1; // Polígono
+        update.pointCount = numPoints;
+        update.centerLat = 0.0;
+        update.centerLng = 0.0;
+        update.radius = 0.0f;
+        
+        // Copiar puntos y calcular centro aproximado
+        double sumLat = 0.0, sumLng = 0.0;
+        for (uint8_t i = 0; i < numPoints; i++) {
+            update.points[i] = points[i];
+            sumLat += points[i].lat;
+            sumLng += points[i].lng;
+        }
+        update.centerLat = sumLat / numPoints;
+        update.centerLng = sumLng / numPoints;
+        
+        strncpy(update.name, "Polygon", sizeof(update.name) - 1);
+        strncpy(update.groupId, groupId, sizeof(update.groupId) - 1);
+        update.name[sizeof(update.name) - 1] = '\0';
+        update.groupId[sizeof(update.groupId) - 1] = '\0';
+        
+        geofenceUpdateCallback(update);
+        LOG_I("✅ Geocerca poligonal actualizada");
+    } else {
+        LOG_W("⚠️ Callback de geocerca no configurado");
+    }
 }
 
 // ============================================================================

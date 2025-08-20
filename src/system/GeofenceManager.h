@@ -6,7 +6,7 @@
 
 /*
  * ============================================================================
- * GEOFENCE MANAGER - GESTIÓN DE GEOCERCAS
+ * GEOFENCE MANAGER - GESTIÓN DE GEOCERCAS CON SOPORTE POLÍGONOS
  * ============================================================================
  */
 
@@ -19,15 +19,16 @@ public:
     bool isInitialized() const;
     
     // Gestión de geocerca principal
-    void setGeofence(double centerLat, double centerLng, float radius, const char* name = "Principal");
+    void setGeofence(double centerLat, double centerLng, float radius, const char* name = "Principal", const char* groupId = "none");
     void setGeofence(const Geofence& geofence);
+    void setPolygonGeofence(const GeoPoint* points, uint8_t numPoints, const char* name = "Polygon", const char* groupId = "none");
     Geofence getGeofence() const;
     
     // Control de activación
     void activate(bool enabled);
     bool isActive() const;
     
-    // Verificación de posición
+    // Verificación de posición - círculos y polígonos
     bool isInsideGeofence(const Position& position) const;
     bool isInsideGeofence(double lat, double lng) const;
     float getDistance(const Position& position) const;
@@ -38,6 +39,13 @@ public:
     double getCenterLng() const;
     float getRadius() const;
     const char* getName() const;
+    const char* getGroupId() const;
+    GeofenceType getType() const;
+    
+    // Para polígonos
+    uint8_t getPolygonPointCount() const;
+    GeoPoint getPolygonPoint(uint8_t index) const;
+    bool hasValidPolygon() const;
     
     // Análisis y estadísticas
     AlertLevel calculateAlertLevel(const Position& position) const;
@@ -69,28 +77,34 @@ public:
     // Update loop (llamar desde loop principal)
     void update(const Position& currentPosition);
     
-    // Persistencia (guardar/cargar configuración)
-    Result saveConfiguration();
-    Result loadConfiguration();
+    // ❌ PERSISTENCIA REMOVIDA POR SEGURIDAD
+    // NO HAY persistencia automática de geocercas por temas de seguridad
+    // Las geocercas deben ser reconfiguradas desde el backend después de cada reinicio
+    void clearCurrentGeofence();
     void resetToDefaults();
     
-    // Utilidades de cálculo
+    // Utilidades de cálculo - estáticas
     static float calculateDistance(double lat1, double lng1, double lat2, double lng2);
     static bool isValidCoordinate(double lat, double lng);
+    
+    // NUEVO: Algoritmos para polígonos
+    static bool isPointInPolygon(double lat, double lng, const GeoPoint* points, uint8_t numPoints);
+    static float distanceToPolygonBoundary(double lat, double lng, const GeoPoint* points, uint8_t numPoints);
+    static float distanceToLineSegment(double lat, double lng, const GeoPoint& p1, const GeoPoint& p2);
     
 private:
     bool initialized;
     
-    // Geocerca principal
+    // Geocerca principal (solo una activa a la vez por seguridad)
     Geofence primaryGeofence;
     bool active;
     
-    // Array de geocercas múltiples
+    // Array de geocercas múltiples (para expansión futura)
     Geofence geofences[MAX_GEOFENCES];
     bool geofenceActive[MAX_GEOFENCES];
     uint8_t geofenceCount;
     
-    // Estadísticas y estado
+    // Estadísticas y estado (NO persistentes)
     uint32_t violationsCount;
     uint32_t lastViolationTime;
     float minDistanceRecorded;
@@ -119,12 +133,18 @@ private:
     
     // Validación
     bool isValidGeofence(const Geofence& geofence) const;
+    bool isValidPolygonGeofence(const GeoPoint* points, uint8_t numPoints) const;
     
-    // Utilidades internas
-    float distanceToGeofenceBoundary(const Geofence& geofence, double lat, double lng) const;
-    bool isPositionInside(const Geofence& geofence, double lat, double lng) const;
+    // Utilidades internas - círculos
+    float distanceToCircleBoundary(const Geofence& geofence, double lat, double lng) const;
+    bool isPositionInsideCircle(const Geofence& geofence, double lat, double lng) const;
+    
+    // Utilidades internas - polígonos
+    float distanceToPolygonBoundaryInternal(const Geofence& geofence, double lat, double lng) const;
+    bool isPositionInsidePolygon(const Geofence& geofence, double lat, double lng) const;
     
     // Constantes para cálculos
     static constexpr double EARTH_RADIUS_M = 6371000.0; // Radio de la Tierra en metros
+    static constexpr double MIN_POLYGON_AREA = 100.0;   // Área mínima para polígonos (m²)
     // Usamos las definiciones de Arduino.h para DEG_TO_RAD y RAD_TO_DEG
 };
