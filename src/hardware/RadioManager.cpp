@@ -110,87 +110,50 @@ Result RadioManager::setupLoRaWAN() {
     return Result::SUCCESS;
 }
 
+// Reemplaza la función joinOTAA completa con esta versión final, simple y correcta
+
 Result RadioManager::joinOTAA(const uint8_t* devEUI, const uint8_t* appEUI, const uint8_t* appKey) {
     if (!initialized) return Result::ERROR_INIT;
-    
-    LOG_I("📡 Iniciando OTAA Join...");
+
+    LOG_I("📡 Iniciando OTAA Join (manejado por RadioLib)...");
     currentState = STATE_JOINING;
-    
-    // Convertir arrays a uint64_t (little endian)
-    uint64_t joinEUI = 0, deviceEUI = 0;
+
+    // Convertir arrays de EUI a uint64_t (little endian)
+    uint64_t joinEUI_le = 0, devEUI_le = 0;
     for (int i = 0; i < 8; i++) {
-        joinEUI |= ((uint64_t)appEUI[i]) << (i * 8);
-        deviceEUI |= ((uint64_t)devEUI[i]) << (i * 8);
+        joinEUI_le |= ((uint64_t)appEUI[i]) << (i * 8);
+        devEUI_le |= ((uint64_t)devEUI[i]) << (i * 8);
     }
     
-    // Crear copias de las claves
+    // Crear copias locales de las claves
     uint8_t nwkKey[16], appKeyLocal[16];
-    memcpy(nwkKey, appKey, 16);     // En LoRaWAN 1.0.x, NwkKey = AppKey
+    memcpy(nwkKey, appKey, 16);
     memcpy(appKeyLocal, appKey, 16);
     
-    // ✅ FORZAR DEV-NONCE INCREMENTAL PERSISTENTE
-    static uint16_t persistentDevNonce = 0;
+    // 1. Configurar los parámetros para el Join.
+    // La librería gestionará el dev-nonce internamente gracias a -DUSE_PREFERENCES=1
+    lorawan.beginOTAA(joinEUI_le, devEUI_le, nwkKey, appKeyLocal);
     
-    // Usar Preferences de forma segura para DevNonce
-    Preferences prefs;
-    
-    // WORKAROUND: Asegurar que el namespace existe
-    // Intentar abrir namespace lorawan
-    if (prefs.begin("lorawan", false)) {
-        // Leer devnonce guardado o generar uno nuevo
-        persistentDevNonce = prefs.getUShort("devnonce", 0);
-        
-        if (persistentDevNonce == 0) {
-            // Primera vez, generar aleatorio
-            persistentDevNonce = random(1000, 30000);
+    // 2. Intentar el Join. RadioLib leerá, usará e incrementará el devNonce guardado.
+    int16_t state = lorawan.activateOTAA();
+
+    if (state == RADIOLIB_LORAWAN_NEW_SESSION || state == RADIOLIB_LORAWAN_SESSION_RESTORED) {
+        joined = true;
+        currentState = STATE_JOINED;
+        LOG_I("✅ OTAA Join exitoso! RadioLib ha gestionado el DevNonce.");
+        if (joinCallback) {
+            joinCallback(true);
         }
-        
-        persistentDevNonce++; // Incrementar para siguiente uso
-        prefs.putUShort("devnonce", persistentDevNonce);
-        prefs.end();
-        LOG_I("📦 DevNonce persistente: %u", persistentDevNonce);
+        return Result::SUCCESS;
     } else {
-        // Si falla Preferences, usar valor basado en tiempo
-        persistentDevNonce = (millis() % 30000) + random(1000, 35000);
-        LOG_W("⚠️ No se pudo abrir Preferences, usando DevNonce temporal: %u", persistentDevNonce);
-    }
-    
-    LOG_I("🎲 Usando dev-nonce: %u", persistentDevNonce);
-    
-    // RadioLib 6.6.0 API para OTAA - beginOTAA() es void
-    lorawan.beginOTAA(joinEUI, deviceEUI, nwkKey, appKeyLocal);
-    
-    // Intentar join real con reintentos
-    int16_t state = RADIOLIB_ERR_NONE;
-    uint8_t maxRetries = 3;
-    
-    for (uint8_t retry = 0; retry < maxRetries; retry++) {
-        state = lorawan.activateOTAA();
-        
-        if (state == RADIOLIB_LORAWAN_NEW_SESSION || state == RADIOLIB_LORAWAN_SESSION_RESTORED) {
-            joined = true;
-            currentState = STATE_JOINED;
-            LOG_I("✅ OTAA Join exitoso con dev-nonce: %u (intento %d)", persistentDevNonce, retry + 1);
-            
-            if (joinCallback) {
-                joinCallback(true);
-            }
-            return Result::SUCCESS;
+        LOG_E("❌ OTAA Join falló. Código de error: %d (%s)", state, getErrorString(state));
+        LOG_E("   Verifica las claves en lorawan_config.h y el estado en ChirpStack.");
+        currentState = STATE_ERROR;
+        if (joinCallback) {
+            joinCallback(false);
         }
-        
-        LOG_W("⚠️ Join intento %d falló, reintentando...", retry + 1);
-        delay(5000 + (retry * 5000)); // Delay incremental entre intentos
-        
-        // Incrementar dev-nonce para próximo intento
-        persistentDevNonce++;
+        return Result::ERROR_COMMUNICATION;
     }
-    
-    LOG_E("❌ OTAA Join falló después de %d intentos: %s", maxRetries, getErrorString(state));
-    currentState = STATE_ERROR;
-    if (joinCallback) {
-        joinCallback(false);
-    }
-    return Result::ERROR_COMMUNICATION;
 }
 
 Result RadioManager::joinABP(const uint8_t* devAddr, const uint8_t* nwkSKey, const uint8_t* appSKey) {
