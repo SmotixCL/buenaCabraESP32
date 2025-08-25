@@ -1,47 +1,45 @@
 #pragma once
-#include <Arduino.h>
+#include <Arduino.h> 
+#include "../config/pins.h"
+#include "../config/constants.h"
+#include "../config/lorawan_config.h"
+#include "../core/Types.h"
 #include <RadioLib.h>
 #ifdef USE_PREFERENCES
 #include <Preferences.h>  // Para persistencia de DevNonce y Frame Counters
 #endif
-#include "config/pins.h"
-#include "config/constants.h"
-#include "core/Types.h"
-#include "core/Logger.h"
 
-/*
- * ============================================================================
- * ESTRUCTURAS PARA ACTUALIZACIONES DE GEOCERCA VÍA DOWNLINK
- * ============================================================================
- */
-
-// Estructura mejorada para soporte de polígonos
-struct GeofenceUpdate {
-    uint8_t type;           // 0=círculo, 1=polígono
-    char name[16];          // Nombre de la geocerca
-    char groupId[16];       // ID del grupo asignado
-    
-    // Para círculos
-    double centerLat;
-    double centerLng;
-    float radius;
-    
-    // Para polígonos
-    uint8_t pointCount;     // Número de puntos del polígono
-    GeoPoint points[10];    // Array de puntos (máximo 10)
-    
-    GeofenceUpdate() :
-        type(0), pointCount(0),
-        centerLat(0.0), centerLng(0.0), radius(0.0f) {
-        strcpy(name, "Unknown");
-        strcpy(groupId, "none");
-        for(uint8_t i = 0; i < 10; i++) {
-            points[i] = GeoPoint();
-        }
-    }
-};
-
+// La estructura GeofenceUpdate ya está definida en lorawan_config.h
 typedef void (*GeofenceUpdateCallback)(const GeofenceUpdate& update);
+
+// Constantes adicionales
+#ifndef SPI_FREQUENCY
+#define SPI_FREQUENCY 8000000
+#endif
+
+// Flags para payload GPS
+#define DEVICE_GPS_FIX_FLAG      0x01
+#define DEVICE_BATTERY_LOW_FLAG  0x02
+#define GEOFENCE_INSIDE_FLAG     0x04
+#define GEOFENCE_TYPE_MASK       0x0F
+#define GEOFENCE_ACTIVE_FLAG     0x10
+
+// Estructura para payload GPS V2 simplificado
+struct __attribute__((packed)) GPSPayloadV2 {
+    uint8_t messageType;      // 0x01 = GPS position
+    int32_t latitude;         // Latitud * 10000000
+    int32_t longitude;        // Longitud * 10000000
+    uint16_t altitude;        // Altitud en metros
+    uint8_t hdop;            // HDOP * 10
+    uint8_t battery;         // Batería %
+    uint8_t alert;           // Nivel de alerta
+    uint8_t batteryPercent;   // Alias para compatibilidad
+    uint8_t status;           // Flags de estado
+    uint8_t satellites;       // Número de satélites
+    uint8_t groupIdHash;      // Hash del groupId
+    uint8_t geofenceFlags;    // Flags de geocerca
+    uint8_t frameCounter;     // Contador de frames
+};
 
 /*
  * ============================================================================
@@ -186,6 +184,7 @@ private:
     size_t createPositionPayload(uint8_t* buffer, const Position& position, AlertLevel alertLevel);
     size_t createBatteryPayload(uint8_t* buffer, const BatteryStatus& battery);
     bool isValidPosition(const Position& position);
+    static uint8_t calculateGroupHash(const char* groupId);
     
     // NUEVO: Payload mejorado con estado del dispositivo
     size_t createDeviceStatusPayload(uint8_t* buffer, const Position& position, 

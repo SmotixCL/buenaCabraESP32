@@ -1,0 +1,139 @@
+/**
+ * ============================================================================
+ * COLLAR BUENACABRA V3.0 - MAIN SIMPLIFICADO PARA PRUEBA
+ * ============================================================================
+ * Versión mínima para verificar compilación
+ */
+
+#include <Arduino.h>
+#include <Wire.h>
+#include <Preferences.h>
+
+// Configuración del sistema
+#include "config/pins.h"
+#include "config/constants.h"
+#include "config/lorawan_config.h"
+#include "core/Types.h"
+#include "core/Logger.h"
+
+// Hardware managers
+#include "hardware/BuzzerManager.h"
+#include "hardware/PowerManager.h"
+#include "hardware/DisplayManager.h"
+#include "hardware/GPSManager.h"
+#include "hardware/RadioManager.h"
+
+// System managers
+#include "system/GeofenceManager.h"
+#include "system/AlertManager.h"
+
+// ============================================================================
+// MANAGERS GLOBALES
+// ============================================================================
+BuzzerManager buzzerManager(BUZZER_PIN);
+PowerManager powerManager(VBAT_PIN);
+DisplayManager displayManager;
+GPSManager gpsManager;
+RadioManager radioManager;
+GeofenceManager geofenceManager;
+AlertManager alertManager(buzzerManager, displayManager);
+
+// Variables de estado
+Position currentPosition;
+BatteryStatus batteryStatus;
+SystemStatus systemStatus;
+bool systemReady = false;
+
+// ============================================================================
+// SETUP
+// ============================================================================
+void setup() {
+    // Inicializar Serial
+    Serial.begin(SERIAL_BAUD);
+    delay(2000);
+    
+    Serial.println(F("\n\n"));
+    Serial.println(F("============================================"));
+    Serial.println(F("    COLLAR BUENACABRA V3.0 - INICIANDO"));
+    Serial.println(F("============================================"));
+    Serial.println(F("Hardware: Heltec WiFi LoRa 32 V3"));
+    Serial.println(F("MCU: ESP32-S3FN8"));
+    Serial.println(F(""));
+    
+    // Configurar pines básicos
+    pinMode(LED_PIN, OUTPUT);
+    pinMode(PRG_BUTTON, INPUT_PULLUP);
+    pinMode(VEXT_ENABLE, OUTPUT);
+    digitalWrite(VEXT_ENABLE, VEXT_ON_VALUE);
+    digitalWrite(LED_PIN, LOW);
+    
+    Serial.println(F("✓ Pines configurados"));
+    
+    // Inicializar I2C
+    Wire.begin(OLED_SDA, OLED_SCL);
+    Wire.setClock(400000);
+    Serial.println(F("✓ I2C inicializado"));
+    
+    // Inicializar managers básicos
+    Serial.println(F("\n🔧 Inicializando managers..."));
+    
+    // Power Manager
+    if (powerManager.init() == Result::SUCCESS) {
+        Serial.println(F("✓ Power Manager OK"));
+    } else {
+        Serial.println(F("✗ Power Manager FALLÓ"));
+    }
+    
+    // Buzzer Manager  
+    if (buzzerManager.init() == Result::SUCCESS) {
+        Serial.println(F("✓ Buzzer Manager OK"));
+        buzzerManager.playTone(1000, 100, 128);
+    } else {
+        Serial.println(F("✗ Buzzer Manager FALLÓ"));
+    }
+    
+    // Display Manager
+    if (displayManager.init() == Result::SUCCESS) {
+        Serial.println(F("✓ Display Manager OK"));
+        displayManager.showSplashScreen();
+    } else {
+        Serial.println(F("✗ Display Manager FALLÓ"));
+    }
+    
+    Serial.println(F("\n✅ SISTEMA INICIADO"));
+    systemReady = true;
+    
+    // LED de confirmación
+    for (int i = 0; i < 3; i++) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(100);
+        digitalWrite(LED_PIN, LOW);
+        delay(100);
+    }
+}
+
+// ============================================================================
+// LOOP
+// ============================================================================
+void loop() {
+    static uint32_t lastHeartbeat = 0;
+    
+    // Heartbeat LED cada 5 segundos
+    if (millis() - lastHeartbeat > 5000) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(50);
+        digitalWrite(LED_PIN, LOW);
+        lastHeartbeat = millis();
+        
+        Serial.print(F("Uptime: "));
+        Serial.print(millis() / 1000);
+        Serial.println(F(" segundos"));
+    }
+    
+    // Actualizar display
+    if (displayManager.isInitialized()) {
+        displayManager.update();
+    }
+    
+    delay(10);
+}

@@ -1,7 +1,7 @@
 #pragma once
-#include <Arduino.h>
-#include "config/constants.h"
-
+#include <Arduino.h> 
+#include "../config/pins.h"
+#include "../config/constants.h"  
 /*
  * ============================================================================
  * SISTEMA DE LOGGING AVANZADO - COLLAR GEOFENCING
@@ -10,14 +10,8 @@
 
 class Logger {
 public:
-    enum Level {
-        ERROR = 1,
-        WARN = 2,
-        INFO = 3,
-        DEBUG = 4
-    };
-
-    static void init(uint32_t baudRate = SERIAL_BAUD);
+    enum Level { ERROR = 1, WARN, INFO, DEBUG };
+    static void init(uint32_t baudRate);
     static void setLevel(Level level);
     static Level getLevel();
     
@@ -58,10 +52,12 @@ private:
 #define LOG_I(...) Logger::info(__VA_ARGS__)
 #define LOG_D(...) Logger::debug(__VA_ARGS__)
 
-// Macros específicas del sistema
 #define LOG_INIT(component, success) Logger::logSystemInit(component, success)
 #define LOG_GEOFENCE(distance, level) Logger::logGeofenceEvent(distance, level)
 #define LOG_PACKET(seq, success) Logger::logPacketSent(seq, success)
 #define LOG_BATTERY(voltage, percentage) Logger::logBatteryStatus(voltage, percentage)
 #define LOG_GPS(lat, lng, valid) Logger::logGPSPosition(lat, lng, valid)
-#define LOG_MEMORY(heap) Logger::logMemoryStatus(heap)
+
+// Niveles de logging
+#define LOG_LEVEL 5
+#define LOG_LEVEL_DEBUG 4

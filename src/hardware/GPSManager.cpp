@@ -1,4 +1,11 @@
+/**
+ * GPSManager simplificado basado en el test exitoso
+ * Versión corregida que funciona con NEO-M8N
+ */
+
 #include "GPSManager.h"
+#include "../core/Logger.h"
+#include <HardwareSerial.h>
 
 // ============================================================================
 // CONSTRUCTOR E INICIALIZACIÓN
@@ -13,8 +20,8 @@ GPSManager::GPSManager(uint8_t rxPin, uint8_t txPin, uint32_t baudRate) :
     newDataAvailable(false),
     lowPowerMode(false),
     updateRate(1000),
-    minSatellites(GPS_MIN_SATELLITES),
-    accuracyThreshold(GPS_ACCURACY_THRESHOLD),
+    minSatellites(3),
+    accuracyThreshold(50.0f),
     lastUpdate(0),
     totalSentences(0),
     validSentences(0),
@@ -58,7 +65,11 @@ Result GPSManager::init() {
     
     if (!dataReceived) {
         LOG_W("🛰️ No se detectan datos GPS - verificar conexiones");
-        // Continuar de todas formas, puede que el GPS tarde en arrancar
+        LOG_W("   TX del GPS (blanco) -> GPIO %d (RX del ESP32)", rxPin);
+        LOG_W("   RX del GPS (verde) -> GPIO %d (TX del ESP32)", txPin);
+        LOG_W("   El LED azul del GPS debe parpadear cuando encuentra satélites");
+    } else {
+        LOG_I("🛰️ Datos GPS detectados! Esperando fix...");
     }
     
     currentState = GPS_SEARCHING;
@@ -114,7 +125,7 @@ bool GPSManager::hasNewData() const {
 // ============================================================================
 
 uint8_t GPSManager::getSatelliteCount() const {
-    return currentPosition.satellites;
+    return nmeaData.satellites;
 }
 
 float GPSManager::getHDOP() const {
@@ -142,15 +153,15 @@ uint32_t GPSManager::getLastUpdateTime() const {
 // ============================================================================
 
 void GPSManager::setUpdateRate(uint16_t rateMs) {
-    updateRate = max(rateMs, (uint16_t)100); // Mínimo 100ms
+    updateRate = max(rateMs, (uint16_t)100);
 }
 
 void GPSManager::setMinSatellites(uint8_t minSats) {
-    minSatellites = max(minSats, (uint8_t)3); // Mínimo 3 satélites
+    minSatellites = max(minSats, (uint8_t)3);
 }
 
 void GPSManager::setAccuracyThreshold(float threshold) {
-    accuracyThreshold = max(threshold, 1.0f); // Mínimo 1 metro
+    accuracyThreshold = max(threshold, 1.0f);
 }
 
 // ============================================================================
@@ -212,13 +223,13 @@ const char* GPSManager::getStateString() const {
 
 void GPSManager::enableLowPowerMode() {
     lowPowerMode = true;
-    updateRate = 5000; // Actualizar cada 5 segundos en modo bajo consumo
+    updateRate = 5000;
     LOG_I("🛰️ GPS en modo bajo consumo");
 }
 
 void GPSManager::disableLowPowerMode() {
     lowPowerMode = false;
-    updateRate = 1000; // Volver a 1 segundo normal
+    updateRate = 1000;
     LOG_I("🛰️ GPS en modo normal");
 }
 
@@ -231,8 +242,15 @@ bool GPSManager::isLowPowerMode() const {
 // ============================================================================
 
 void GPSManager::readSerialData() {
+    static bool firstData = true;
+    
     while (gpsSerial->available()) {
         char c = gpsSerial->read();
+        
+        if (firstData) {
+            LOG_I("🛰️ Recibiendo datos del GPS!");
+            firstData = false;
+        }
         
         if (c == '$') {
             // Inicio de nueva sentencia NMEA
@@ -240,9 +258,8 @@ void GPSManager::readSerialData() {
             nmeaBuffer[bufferIndex++] = c;
         } else if (c == '\n' || c == '\r') {
             // Fin de sentencia
-            if (bufferIndex > 0) {
+            if (bufferIndex > 0 && bufferIndex < NMEA_BUFFER_SIZE) {
                 nmeaBuffer[bufferIndex] = '\0';
-                
                 totalSentences++;
                 
                 if (parseNMEASentence(nmeaBuffer)) {
@@ -254,7 +271,6 @@ void GPSManager::readSerialData() {
                 bufferIndex = 0;
             }
         } else if (bufferIndex < NMEA_BUFFER_SIZE - 1) {
-            // Agregar caracter al buffer
             nmeaBuffer[bufferIndex++] = c;
         } else {
             // Buffer overflow
@@ -265,141 +281,156 @@ void GPSManager::readSerialData() {
 }
 
 // ============================================================================
-// PARSING NMEA
+// PARSING NMEA - Simplificado basado en el test exitoso
 // ============================================================================
 
 bool GPSManager::parseNMEASentence(const char* sentence) {
-    if (!sentence || strlen(sentence) < 6) {
-        return false;
-    }
+    if (!sentence || strlen(sentence) < 6) return false;
     
-    // Identificar tipo de sentencia
-    if (strncmp(sentence, "$GPGGA", 6) == 0 || strncmp(sentence, "$GNGGA", 6) == 0) {
+    // Solo procesamos GGA para simplificar
+    if (strstr(sentence, "GGA")) {
         return parseGGA(sentence);
-    } else if (strncmp(sentence, "$GPRMC", 6) == 0 || strncmp(sentence, "$GNRMC", 6) == 0) {
-        return parseRMC(sentence);
-    } else if (strncmp(sentence, "$GPGSA", 6) == 0 || strncmp(sentence, "$GNGSA", 6) == 0) {
-        return parseGSA(sentence);
+    } else if (strstr(sentence, "GSV")) {
+        // Satélites visibles
+        return true; // Solo para indicar que recibimos datos
     }
     
-    return false; // Sentencia no reconocida
+    return false;
 }
 
 bool GPSManager::parseGGA(const char* sentence) {
-    // $GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47
-    // Campos: 0=tipo, 1=tiempo, 2=lat, 3=N/S, 4=lng, 5=E/W, 6=calidad, 7=sats, 8=hdop, 9=alt, 10=M, ...
+    // Buscar comas para separar campos
+    int commaIndex[15];
+    int commaCount = 0;
     
-    char field[32];
-    
-    // Calidad del fix (campo 6)
-    if (!getField(sentence, 6, field, sizeof(field))) return false;
-    nmeaData.fixQuality = parseInt(field);
-    nmeaData.fixValid = (nmeaData.fixQuality > 0);
-    
-    if (!nmeaData.fixValid) return true; // No hay fix, pero parsing OK
-    
-    // ===== LATITUD (campos 2 y 3) =====
-    // Leer valor de latitud en formato NMEA (ddmm.mmmm)
-    if (!getField(sentence, 2, field, sizeof(field))) return false;
-    double latRaw = parseFloat(field);
-    
-    // Leer dirección N/S
-    if (!getField(sentence, 3, field, sizeof(field))) return false;
-    char latDirection = field[0];
-    
-    // Convertir de NMEA (ddmm.mmmm) a grados decimales
-    int latDeg = (int)(latRaw / 100);           // Grados
-    double latMin = latRaw - (latDeg * 100);    // Minutos decimales
-    nmeaData.latitude = latDeg + (latMin / 60.0); // Grados decimales
-    
-    // Aplicar dirección (Sur = negativo)
-    if (latDirection == 'S') {
-        nmeaData.latitude = -nmeaData.latitude;
+    for (int i = 0; i < strlen(sentence) && commaCount < 15; i++) {
+        if (sentence[i] == ',') {
+            commaIndex[commaCount++] = i;
+        }
     }
     
-    // ===== LONGITUD (campos 4 y 5) =====
-    // Leer valor de longitud en formato NMEA (dddmm.mmmm)
-    if (!getField(sentence, 4, field, sizeof(field))) return false;
-    double lngRaw = parseFloat(field);
+    if (commaCount < 10) return false; // No hay suficientes campos
     
-    // Leer dirección E/W
-    if (!getField(sentence, 5, field, sizeof(field))) return false;
-    char lngDirection = field[0];
+    // Campo 6: Calidad del fix (0 = sin fix, 1 = GPS fix, 2 = DGPS fix)
+    char fixQuality = sentence[commaIndex[5] + 1];
+    nmeaData.fixValid = (fixQuality > '0');
     
-    // Convertir de NMEA (dddmm.mmmm) a grados decimales
-    int lngDeg = (int)(lngRaw / 100);           // Grados
-    double lngMin = lngRaw - (lngDeg * 100);    // Minutos decimales
-    nmeaData.longitude = lngDeg + (lngMin / 60.0); // Grados decimales
-    
-    // Aplicar dirección (Oeste = negativo)
-    if (lngDirection == 'W') {
-        nmeaData.longitude = -nmeaData.longitude;
+    // Campo 7: Número de satélites
+    if (commaIndex[6] + 1 < commaIndex[7]) {
+        char satStr[4] = {0};
+        int len = commaIndex[7] - commaIndex[6] - 1;
+        if (len > 0 && len < 4) {
+            strncpy(satStr, &sentence[commaIndex[6] + 1], len);
+            nmeaData.satellites = atoi(satStr);
+        }
     }
     
-    // Satélites (campo 7)
-    if (!getField(sentence, 7, field, sizeof(field))) return false;
-    nmeaData.satellites = parseInt(field);
+    if (!nmeaData.fixValid) {
+        // Reportar satélites aunque no haya fix
+        if (nmeaData.satellites > 0) {
+            static uint8_t lastSats = 0;
+            if (nmeaData.satellites != lastSats) {
+                LOG_I("🛰️ Satélites visibles: %d (sin fix aún)", nmeaData.satellites);
+                lastSats = nmeaData.satellites;
+            }
+        }
+        return true;
+    }
     
-    // HDOP (campo 8)
-    if (!getField(sentence, 8, field, sizeof(field))) return false;
-    nmeaData.hdop = parseFloat(field);
+    // Campo 2: Latitud (ddmm.mmmm)
+    if (commaIndex[1] + 1 < commaIndex[2]) {
+        char latStr[12] = {0};
+        int len = commaIndex[2] - commaIndex[1] - 1;
+        if (len > 0 && len < 12) {
+            strncpy(latStr, &sentence[commaIndex[1] + 1], len);
+            double latRaw = atof(latStr);
+            
+            // Convertir de NMEA a grados decimales
+            int latDeg = (int)(latRaw / 100);
+            double latMin = latRaw - (latDeg * 100);
+            nmeaData.latitude = latDeg + (latMin / 60.0);
+            
+            // Campo 3: N/S
+            if (sentence[commaIndex[2] + 1] == 'S') {
+                nmeaData.latitude = -nmeaData.latitude;
+            }
+        }
+    }
     
-    // Altitud (campo 9)
-    if (!getField(sentence, 9, field, sizeof(field))) return false;
-    nmeaData.altitude = parseFloat(field);
+    // Campo 4: Longitud (dddmm.mmmm)
+    if (commaIndex[3] + 1 < commaIndex[4]) {
+        char lngStr[13] = {0};
+        int len = commaIndex[4] - commaIndex[3] - 1;
+        if (len > 0 && len < 13) {
+            strncpy(lngStr, &sentence[commaIndex[3] + 1], len);
+            double lngRaw = atof(lngStr);
+            
+            // Convertir de NMEA a grados decimales
+            int lngDeg = (int)(lngRaw / 100);
+            double lngMin = lngRaw - (lngDeg * 100);
+            nmeaData.longitude = lngDeg + (lngMin / 60.0);
+            
+            // Campo 5: E/W
+            if (sentence[commaIndex[4] + 1] == 'W') {
+                nmeaData.longitude = -nmeaData.longitude;
+            }
+        }
+    }
     
-    // Actualizar posición si es válida
-    if (isValidPosition(nmeaData.latitude, nmeaData.longitude) && passesAccuracyFilter()) {
+    // Campo 8: HDOP
+    if (commaIndex[7] + 1 < commaIndex[8]) {
+        char hdopStr[8] = {0};
+        int len = commaIndex[8] - commaIndex[7] - 1;
+        if (len > 0 && len < 8) {
+            strncpy(hdopStr, &sentence[commaIndex[7] + 1], len);
+            nmeaData.hdop = atof(hdopStr);
+        }
+    }
+    
+    // Campo 9: Altitud
+    if (commaIndex[8] + 1 < commaIndex[9]) {
+        char altStr[10] = {0};
+        int len = commaIndex[9] - commaIndex[8] - 1;
+        if (len > 0 && len < 10) {
+            strncpy(altStr, &sentence[commaIndex[8] + 1], len);
+            nmeaData.altitude = atof(altStr);
+        }
+    }
+    
+    // Actualizar posición si tenemos coordenadas válidas
+    if (nmeaData.latitude != 0.0 && nmeaData.longitude != 0.0) {
         currentPosition.latitude = nmeaData.latitude;
         currentPosition.longitude = nmeaData.longitude;
         currentPosition.altitude = nmeaData.altitude;
         currentPosition.satellites = nmeaData.satellites;
-        currentPosition.accuracy = nmeaData.hdop * 3.0f; // Aproximación de precisión
+        currentPosition.accuracy = nmeaData.hdop * 3.0f;
         currentPosition.timestamp = millis();
         currentPosition.valid = true;
         
         hasValidData = true;
         newDataAvailable = true;
         
-        triggerPositionCallback();
+        // Log exitoso como en el test
+        LOG_I("\n=== GPS FIX VÁLIDO ===");
+        LOG_I("Latitud: %.6f", nmeaData.latitude);
+        LOG_I("Longitud: %.6f", nmeaData.longitude);
+        LOG_I("Satélites: %d", nmeaData.satellites);
+        LOG_I("===================\n");
         
-        // Log para debug
-        LOG_D("🛰️ GPS Fix: %.6f°%c, %.6f°%c | Sats: %d | HDOP: %.1f", 
-              abs(nmeaData.latitude), (nmeaData.latitude >= 0) ? 'N' : 'S',
-              abs(nmeaData.longitude), (nmeaData.longitude >= 0) ? 'E' : 'W',
-              nmeaData.satellites, nmeaData.hdop);
+        triggerPositionCallback();
     }
     
     return true;
 }
 
 bool GPSManager::parseRMC(const char* sentence) {
-    // $GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A
-    // Campos: 0=tipo, 1=tiempo, 2=status, 3=lat, 4=N/S, 5=lng, 6=E/W, 7=speed, 8=course, 9=date, ...
-    
-    char field[32];
-    
-    // Status (campo 2) - debe ser 'A' para datos válidos
-    if (!getField(sentence, 2, field, sizeof(field))) return false;
-    if (field[0] != 'A') return true; // No hay datos válidos
-    
-    // Velocidad (campo 7) - en nudos
-    if (getField(sentence, 7, field, sizeof(field))) {
-        nmeaData.speed = parseFloat(field) * 1.852f; // Convertir nudos a km/h
-    }
-    
-    // Curso (campo 8) - en grados
-    if (getField(sentence, 8, field, sizeof(field))) {
-        nmeaData.course = parseFloat(field);
-    }
-    
+    // Simplificado - no necesario para posición básica
     return true;
 }
 
 bool GPSManager::parseGSA(const char* sentence) {
-    // $GPGSA,A,3,04,05,,09,12,,,24,,,,,2.5,1.3,2.1*39
-    // Información sobre modo de fix y precisión
-    return true; // Implementación básica
+    // Simplificado - no necesario para posición básica
+    return true;
 }
 
 // ============================================================================
@@ -407,8 +438,7 @@ bool GPSManager::parseGSA(const char* sentence) {
 // ============================================================================
 
 double GPSManager::parseCoordinate(const char* coord, const char* direction) {
-    double result = parseFloat(coord);
-    return result;
+    return atof(coord);
 }
 
 float GPSManager::parseFloat(const char* str) {
@@ -422,37 +452,8 @@ int GPSManager::parseInt(const char* str) {
 }
 
 bool GPSManager::getField(const char* sentence, int fieldNumber, char* buffer, size_t bufferSize) {
-    if (!sentence || !buffer || bufferSize == 0) return false;
-    
-    int currentField = 0;
-    const char* start = sentence;
-    const char* end;
-    
-    // Buscar el campo especificado
-    while (currentField < fieldNumber) {
-        start = strchr(start, ',');
-        if (!start) return false;
-        start++; // Saltar la coma
-        currentField++;
-    }
-    
-    // Encontrar el final del campo
-    end = strchr(start, ',');
-    if (!end) {
-        end = strchr(start, '*'); // Final de sentencia
-        if (!end) {
-            end = start + strlen(start);
-        }
-    }
-    
-    // Copiar el campo al buffer
-    size_t length = end - start;
-    if (length >= bufferSize) length = bufferSize - 1;
-    
-    strncpy(buffer, start, length);
-    buffer[length] = '\0';
-    
-    return true;
+    // Función simplificada - no se usa en esta versión
+    return false;
 }
 
 // ============================================================================
@@ -460,13 +461,14 @@ bool GPSManager::getField(const char* sentence, int fieldNumber, char* buffer, s
 // ============================================================================
 
 bool GPSManager::isValidPosition(double lat, double lng) const {
-    return lat >= -90.0 && lat <= 90.0 && lng >= -180.0 && lng <= 180.0 &&
-           lat != 0.0 && lng != 0.0; // Evitar coordenadas (0,0)
+    return lat >= -90.0 && lat <= 90.0 && 
+           lng >= -180.0 && lng <= 180.0 &&
+           lat != 0.0 && lng != 0.0;
 }
 
 bool GPSManager::passesAccuracyFilter() const {
-    return nmeaData.satellites >= minSatellites && 
-           nmeaData.hdop > 0 && nmeaData.hdop <= (accuracyThreshold / 3.0f);
+    // Simplificado: solo verificar satélites mínimos
+    return nmeaData.satellites >= 3;
 }
 
 void GPSManager::updateStatistics() {
@@ -485,7 +487,7 @@ void GPSManager::updateState() {
     
     if (!hasValidData) {
         currentState = GPS_SEARCHING;
-    } else if (nmeaData.satellites >= 4 && nmeaData.altitude > 0) {
+    } else if (nmeaData.satellites >= 4) {
         currentState = GPS_FIX_3D;
     } else if (nmeaData.satellites >= 3) {
         currentState = GPS_FIX_2D;
@@ -493,9 +495,10 @@ void GPSManager::updateState() {
         currentState = GPS_SEARCHING;
     }
     
-    // Triggear callback si cambió el estado del fix
-    if ((oldState >= GPS_FIX_2D) != (currentState >= GPS_FIX_2D)) {
-        triggerFixCallback(currentState >= GPS_FIX_2D);
+    if ((oldState < GPS_FIX_2D) && (currentState >= GPS_FIX_2D)) {
+        triggerFixCallback(true);
+    } else if ((oldState >= GPS_FIX_2D) && (currentState < GPS_FIX_2D)) {
+        triggerFixCallback(false);
     }
 }
 
@@ -529,7 +532,13 @@ void GPSManager::logGPSInfo() const {
           totalSentences);
           
     if (hasValidData) {
-        LOG_GPS(currentPosition.latitude, currentPosition.longitude, true);
+        LOG_I("📍 Posición: %.6f, %.6f | Alt: %.1fm | Precisión: %.1fm",
+              currentPosition.latitude, currentPosition.longitude,
+              currentPosition.altitude, currentPosition.accuracy);
+    } else if (nmeaData.satellites > 0) {
+        LOG_I("🔍 Buscando fix... Satélites visibles: %d", nmeaData.satellites);
+    } else {
+        LOG_W("⚠️ Sin satélites visibles - verificar antena y ubicación");
     }
 }
 

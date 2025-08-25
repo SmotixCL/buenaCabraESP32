@@ -1,4 +1,5 @@
 #include "PowerManager.h"
+#include "../core/Logger.h"
 #include <esp_task_wdt.h>
 #include <esp_sleep.h>
 #include <soc/rtc.h>
@@ -297,4 +298,14 @@ void PowerManager::restorePinsAfterSleep() {
     pinMode(EXP_PIN_2, OUTPUT);
     pinMode(EXP_PIN_3, OUTPUT);
     pinMode(EXP_PIN_4, OUTPUT);
+}
+
+float PowerManager::calculateBatteryPercentage(float voltage) {
+    // Mapear voltaje a porcentaje (3.0V = 0%, 4.2V = 100%)
+    if (voltage <= BATTERY_MIN_VOLTAGE) return 0;
+    if (voltage >= BATTERY_MAX_VOLTAGE) return 100;
+    
+    float percentage = ((voltage - BATTERY_MIN_VOLTAGE) / 
+                       (BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE)) * 100.0;
+    return constrain(percentage, 0, 100);
 }

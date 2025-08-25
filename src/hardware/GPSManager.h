@@ -1,11 +1,15 @@
 #pragma once
-#include <Arduino.h>
+#include <Arduino.h> 
+#include "../config/pins.h"
+#include "../config/constants.h"
+#include "../core/Types.h"
 #include <HardwareSerial.h>
-#include "config/pins.h"
-#include "config/constants.h"
-#include "core/Types.h"
-#include "core/Logger.h"
 
+// Definiciones GPS
+#define GPS_RX GPS_RX_PIN
+#define GPS_TX GPS_TX_PIN
+#define GPS_BAUD GPS_BAUD_RATE
+#define GPS_ACCURACY_THRESHOLD GPS_HDOP_THRESHOLD
 /*
  * ============================================================================
  * GPS MANAGER - GESTIÓN GPS REAL POR UART
@@ -14,9 +18,8 @@
 
 class GPSManager {
 public:
-    GPSManager(uint8_t rxPin = GPS_RX_PIN, uint8_t txPin = GPS_TX_PIN, uint32_t baudRate = GPS_BAUD);
-    
-    // Inicialización
+    // Constructor corregido para usar los nombres de config.h
+    GPSManager(uint8_t rxPin = GPS_RX, uint8_t txPin = GPS_TX, uint32_t baudRate = GPS_BAUD);
     Result init();
     bool isInitialized() const;
     

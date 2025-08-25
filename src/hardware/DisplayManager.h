@@ -3,18 +3,22 @@
 #define DISPLAY_MANAGER_H
 
 #pragma once
-
-#include <Arduino.h>
-#include <SSD1306Wire.h>
+#include <Arduino.h> 
 #include "config/pins.h"
 #include "config/constants.h"
-#include "core/Types.h"
-#include "core/Logger.h"
+#include "core/Types.h" 
+#include <SSD1306Wire.h>
+
 
 // ============================================================================
 // ENUMERACIONES Y TIPOS ADICIONALES
 // ============================================================================
 // GeofenceType ya está definido en core/Types.h
+
+// Timeouts
+#ifndef OLED_TIMEOUT_SLEEP
+#define OLED_TIMEOUT_SLEEP 300000  // 5 minutos
+#endif
 
 // ============================================================================
 // CLASE DISPLAY MANAGER

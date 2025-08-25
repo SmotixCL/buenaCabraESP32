@@ -1,5 +1,6 @@
 // DisplayManager.cpp - Sistema de pantallas mejorado con navegación y mejor UI
 #include "DisplayManager.h"
+#include "../core/Logger.h"
 #include <Arduino.h>
 
 // Variables para navegación entre pantallas

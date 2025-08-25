@@ -1,8 +1,8 @@
 #pragma once
-#include <Arduino.h>
-#include "config/constants.h"
-#include "core/Types.h"
-#include "core/Logger.h"
+#include <Arduino.h> 
+#include "../config/pins.h"
+#include "../config/constants.h"
+#include "../core/Types.h"
 
 /*
  * ============================================================================

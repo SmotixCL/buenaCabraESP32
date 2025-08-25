@@ -1,0 +1,91 @@
+/**
+ * ============================================================================
+ * TEST DE COMPILACIÓN MÍNIMO
+ * ============================================================================
+ * Archivo para verificar que todas las dependencias compilan correctamente
+ */
+
+#include <Arduino.h>
+#include <Wire.h>
+
+// Configuración
+#include "config/pins.h"
+#include "config/constants.h"
+#include "config/lorawan_config.h"
+#include "core/Types.h"
+#include "core/Logger.h"
+
+// Hardware managers
+#include "hardware/BuzzerManager.h"
+#include "hardware/PowerManager.h"
+#include "hardware/DisplayManager.h"
+#include "hardware/GPSManager.h"
+#include "hardware/RadioManager.h"
+
+// System managers  
+#include "system/GeofenceManager.h"
+#include "system/AlertManager.h"
+
+// Instancias
+BuzzerManager buzzerManager(BUZZER_PIN);
+PowerManager powerManager(VBAT_PIN);
+DisplayManager displayManager;
+GPSManager gpsManager;
+RadioManager radioManager;
+GeofenceManager geofenceManager;
+AlertManager alertManager(buzzerManager, displayManager);
+
+void setup() {
+    Serial.begin(115200);
+    delay(2000);
+    
+    Serial.println(F("\n=== TEST DE COMPILACIÓN ==="));
+    Serial.println(F("Sistema iniciando..."));
+    
+    // Configurar pines
+    pinMode(LED_PIN, OUTPUT);
+    pinMode(VEXT_ENABLE, OUTPUT);
+    digitalWrite(VEXT_ENABLE, VEXT_ON_VALUE);
+    
+    // Inicializar I2C
+    Wire.begin(OLED_SDA, OLED_SCL);
+    
+    // Test básico de managers
+    Serial.println(F("Inicializando PowerManager..."));
+    powerManager.init();
+    
+    Serial.println(F("Inicializando BuzzerManager..."));
+    buzzerManager.init();
+    
+    Serial.println(F("Inicializando DisplayManager..."));
+    displayManager.init();
+    
+    Serial.println(F("\n✅ COMPILACIÓN EXITOSA"));
+    Serial.println(F("Todos los componentes compilan correctamente"));
+    
+    // LED de confirmación
+    for(int i = 0; i < 5; i++) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(100);
+        digitalWrite(LED_PIN, LOW);
+        delay(100);
+    }
+}
+
+void loop() {
+    static uint32_t lastPrint = 0;
+    
+    if (millis() - lastPrint > 5000) {
+        Serial.print(F("⏰ Uptime: "));
+        Serial.print(millis() / 1000);
+        Serial.println(F(" segundos"));
+        
+        digitalWrite(LED_PIN, HIGH);
+        delay(50);
+        digitalWrite(LED_PIN, LOW);
+        
+        lastPrint = millis();
+    }
+    
+    delay(10);
+}

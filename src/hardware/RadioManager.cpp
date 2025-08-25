@@ -1,4 +1,5 @@
 #include "RadioManager.h"
+#include "../core/Logger.h"
 #include <Preferences.h>  // Para guardar configuración persistente
 
 // ============================================================================
@@ -558,6 +559,17 @@ size_t RadioManager::createPositionPayload(uint8_t* buffer, const Position& posi
 }
 
 // NUEVO: Payload mejorado con estado del dispositivo
+uint8_t RadioManager::calculateGroupHash(const char* groupId) {
+    // Simple hash de 8 bits para el groupId
+    uint8_t hash = 0;
+    if (groupId == nullptr) return 0;
+    
+    for (size_t i = 0; groupId[i] != '\0'; i++) {
+        hash = hash * 31 + (uint8_t)groupId[i];
+    }
+    return hash;
+}
+
 size_t RadioManager::createDeviceStatusPayload(uint8_t* buffer, const Position& position, 
                                               const BatteryStatus& battery, AlertLevel alertLevel,
                                               const Geofence& geofence, bool gpsValid, 
@@ -854,7 +866,8 @@ void RadioManager::parsePolygonGeofence(const uint8_t* data, size_t length) {
         // Copiar puntos y calcular centro aproximado
         double sumLat = 0.0, sumLng = 0.0;
         for (uint8_t i = 0; i < numPoints; i++) {
-            update.points[i] = points[i];
+            update.points[i].lat = points[i].lat;
+            update.points[i].lng = points[i].lng;
             sumLat += points[i].lat;
             sumLng += points[i].lng;
         }

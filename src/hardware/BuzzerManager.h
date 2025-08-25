@@ -1,15 +1,20 @@
 #pragma once
-#include <Arduino.h>
-#include "config/pins.h"
-#include "config/constants.h"
-#include "core/Types.h"
-#include "core/Logger.h"
+#include <Arduino.h> 
+#include "../config/pins.h"
+#include "../config/constants.h"
+#include "../core/Types.h"
+#include "musical_notes.h"  // Notas musicales 
 
 /*
  * ============================================================================
  * BUZZER MANAGER - GESTIÓN DE AUDIO Y ALERTAS
  * ============================================================================
  */
+
+// Definiciones de volumen
+#define VOLUME_LOW 64
+#define VOLUME_MEDIUM 128
+#define VOLUME_HIGH 255
 
 class BuzzerManager {
 public:
@@ -34,6 +39,7 @@ public:
     
     // Sistema de alertas progresivas
     void playAlertLevel(AlertLevel level);
+    void playAlertTone(AlertLevel level) { playAlertLevel(level); }  // Alias para compatibilidad
     void startContinuousAlert(AlertLevel level);
     void stopContinuousAlert();
     

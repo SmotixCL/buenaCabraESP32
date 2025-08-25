@@ -1,4 +1,5 @@
 #include "AlertManager.h"
+#include "../core/Logger.h"
 
 // ============================================================================
 // CONSTRUCTOR E INICIALIZACIÓN

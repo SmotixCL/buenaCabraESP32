@@ -1,4 +1,5 @@
 #include "GeofenceManager.h"
+#include "../core/Logger.h"
 
 // ============================================================================
 // CONSTRUCTOR E INICIALIZACIÓN
@@ -575,10 +576,17 @@ float GeofenceManager::distanceToLineSegment(double lat, double lng, const GeoPo
 
 void GeofenceManager::initializeThresholds() {
     // Configurar umbrales por defecto basados en constantes
-    thresholds[0] = {CAUTION_DISTANCE, AlertLevel::CAUTION};   // 10m
-    thresholds[1] = {WARNING_DISTANCE, AlertLevel::WARNING};   // 5m
-    thresholds[2] = {DANGER_DISTANCE, AlertLevel::DANGER};     // 2m
-    thresholds[3] = {EMERGENCY_DISTANCE, AlertLevel::EMERGENCY}; // 0m
+    thresholds[0].distance = CAUTION_DISTANCE;
+    thresholds[0].level = AlertLevel::CAUTION;
+    
+    thresholds[1].distance = WARNING_DISTANCE;
+    thresholds[1].level = AlertLevel::WARNING;
+    
+    thresholds[2].distance = DANGER_DISTANCE;
+    thresholds[2].level = AlertLevel::DANGER;
+    
+    thresholds[3].distance = EMERGENCY_DISTANCE;
+    thresholds[3].level = AlertLevel::EMERGENCY;
 }
 
 void GeofenceManager::updateStatistics(const Position& position) {
@@ -632,7 +640,7 @@ bool GeofenceManager::isValidGeofence(const Geofence& geofence) const {
 }
 
 bool GeofenceManager::isValidPolygonGeofence(const GeoPoint* points, uint8_t numPoints) const {
-    if (numPoints < 3 || numPoints > Geofence::MAX_POLYGON_POINTS) {
+    if (numPoints < 3 || numPoints > 10) { // MAX_POLYGON_POINTS = 10
         return false;
     }
     

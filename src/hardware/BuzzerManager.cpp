@@ -1,4 +1,5 @@
 #include "BuzzerManager.h"
+#include "../core/Logger.h"
 
 // ============================================================================
 // MELODÍAS PREDEFINIDAS
@@ -277,21 +278,11 @@ void BuzzerManager::updateContinuousAlert() {
 }
 
 void BuzzerManager::initializeAlertConfigs() {
-    // Configuración por defecto para cada nivel
-    alertConfigs[static_cast<uint8_t>(AlertLevel::SAFE)] = 
-        AlertConfig(0, 0, 0); // Sin sonido
-        
-    alertConfigs[static_cast<uint8_t>(AlertLevel::CAUTION)] = 
-        AlertConfig(FREQ_CAUTION, TONE_DURATION_SHORT, VOLUME_LOW);
-        
-    alertConfigs[static_cast<uint8_t>(AlertLevel::WARNING)] = 
-        AlertConfig(FREQ_WARNING, TONE_DURATION_MEDIUM, VOLUME_MEDIUM);
-        
-    alertConfigs[static_cast<uint8_t>(AlertLevel::DANGER)] = 
-        AlertConfig(FREQ_DANGER, TONE_DURATION_MEDIUM, VOLUME_HIGH);
-        
-    alertConfigs[static_cast<uint8_t>(AlertLevel::EMERGENCY)] = 
-        AlertConfig(FREQ_EMERGENCY, TONE_DURATION_LONG, VOLUME_MAX);
+    alertConfigs[static_cast<uint8_t>(AlertLevel::SAFE)] = AlertConfig(0, 0, 0);
+    alertConfigs[static_cast<uint8_t>(AlertLevel::CAUTION)] = AlertConfig(FREQ_CAUTION, TONE_DURATION_SHORT, VOLUME_LOW);
+    alertConfigs[static_cast<uint8_t>(AlertLevel::WARNING)] = AlertConfig(FREQ_WARNING, TONE_DURATION_MEDIUM, VOLUME_MEDIUM);
+    alertConfigs[static_cast<uint8_t>(AlertLevel::DANGER)] = AlertConfig(FREQ_DANGER, TONE_DURATION_MEDIUM, VOLUME_HIGH);
+    alertConfigs[static_cast<uint8_t>(AlertLevel::EMERGENCY)] = AlertConfig(FREQ_EMERGENCY, TONE_DURATION_LONG, VOLUME_MAX);
     
     // Configurar intervalos específicos para cada nivel
     alertConfigs[static_cast<uint8_t>(AlertLevel::CAUTION)].interval = 5000;    // Cada 5s

@@ -146,8 +146,8 @@ void Logger::printBanner() {
     Serial.println("📡 Radio: SX1262 LoRaWAN");
     Serial.println("📺 Display: OLED 128x64 I2C");
     Serial.println("🎵 Audio: Buzzer PWM optimizado");
-    Serial.println("🎯 Firmware: " FIRMWARE_VERSION);
-    Serial.println("🏭 Fabricante: " MANUFACTURER);
+    Serial.println("🎯 Firmware: " + String(FIRMWARE_VERSION));
+    Serial.println("🏭 Fabricante: " + String(MANUFACTURER));
     Serial.println("🚀 ===============================================");
     Serial.println();
 }
