@@ -7,7 +7,7 @@
     "terminal.integrated.env.windows": {
         "PLATFORMIO_CALLER": "vscode"
     },
-    "C_Cpp.errorSquiggles": "Enabled",
+    "C_Cpp.errorSquiggles": "enabled",
     "C_Cpp.intelliSenseEngine": "default",
     "C_Cpp.default.compilerPath": "",
     "C_Cpp.default.includePath": [
