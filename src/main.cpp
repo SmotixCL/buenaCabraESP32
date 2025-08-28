@@ -112,41 +112,6 @@ const uint8_t TOTAL_SCREENS = 4;
 // FUNCIONES DE UTILIDAD
 // ============================================================================
 
-void printBanner()
-{
-    Serial.println(F("\n\n"));
-    Serial.println(F("╔══════════════════════════════════════════════════════╗"));
-    Serial.println(F("║      🐐 COLLAR BUENACABRA V3.0 - INICIANDO 🐐       ║"));
-    Serial.println(F("╠══════════════════════════════════════════════════════╣"));
-    Serial.println(F("║  Hardware: Heltec WiFi LoRa 32 V3                   ║"));
-    Serial.println(F("║  MCU: ESP32-S3FN8 @ 240MHz                          ║"));
-    Serial.println(F("║  Radio: SX1262 LoRaWAN                              ║"));
-    Serial.println(F("║  Display: OLED 128x64                               ║"));
-    Serial.println(F("╚══════════════════════════════════════════════════════╝"));
-    Serial.println(F(""));
-}
-
-void printSystemInfo()
-{
-    Serial.println(F("\n📊 INFORMACIÓN DEL SISTEMA:"));
-    Serial.print(F("   • Chip Model: "));
-    Serial.println(ESP.getChipModel());
-    Serial.print(F("   • Chip Cores: "));
-    Serial.println(ESP.getChipCores());
-    Serial.print(F("   • CPU Freq: "));
-    Serial.print(ESP.getCpuFreqMHz());
-    Serial.println(F(" MHz"));
-    Serial.print(F("   • Flash Size: "));
-    Serial.print(ESP.getFlashChipSize() / 1024);
-    Serial.println(F(" KB"));
-    Serial.print(F("   • Free Heap: "));
-    Serial.print(ESP.getFreeHeap());
-    Serial.println(F(" bytes"));
-    Serial.print(F("   • SDK Version: "));
-    Serial.println(ESP.getSdkVersion());
-    Serial.println(F(""));
-}
-
 void blinkLED(uint8_t times, uint16_t delayMs = 100)
 {
     for (uint8_t i = 0; i < times; i++)
@@ -216,7 +181,7 @@ void onGeofenceUpdate(const GeofenceUpdate &update)
 
 bool initHardware()
 {
-    Serial.println(F("\n🔧 INICIALIZANDO HARDWARE..."));
+    LOG_I("\n🔧 INICIALIZANDO HARDWARE...");
 
     // Configurar pines básicos
     pinMode(LED_PIN, OUTPUT);
@@ -230,12 +195,12 @@ bool initHardware()
     // Esperar a que se estabilice la alimentación
     delay(500); // Aumentado para dar tiempo al display y GPS
 
-    Serial.println(F("   ✓ Pines configurados y VEXT activado"));
+    LOG_I("   ✓ Pines configurados y VEXT activado");
 
     // Inicializar I2C
     Wire.begin(OLED_SDA, OLED_SCL);
     Wire.setClock(400000); // 400kHz para mejor velocidad
-    Serial.println(F("   ✓ I2C inicializado"));
+    LOG_I("   ✓ I2C inicializado");
 
     delay(100); // Dar tiempo adicional
     return true;
@@ -243,107 +208,107 @@ bool initHardware()
 
 bool initManagers()
 {
-    Serial.println(F("\n🚀 INICIALIZANDO MANAGERS..."));
+    LOG_I("\n🚀 INICIALIZANDO MANAGERS...");
     bool allOk = true;
 
     // Power Manager
     if (powerManager.init() == Result::SUCCESS)
     {
-        Serial.println(F("   ✓ Power Manager OK"));
+        LOG_I("   ✓ Power Manager OK");
     }
     else
     {
-        Serial.println(F("   ✗ Power Manager FALLÓ"));
+        LOG_E("   ✗ Power Manager FALLÓ");
         allOk = false;
     }
 
     // Buzzer Manager
     if (buzzerManager.init() == Result::SUCCESS)
     {
-        Serial.println(F("   ✓ Buzzer Manager OK"));
+        LOG_I("   ✓ Buzzer Manager OK");
         buzzerManager.playTone(1000, 50, 50); // Beep de confirmación
     }
     else
     {
-        Serial.println(F("   ✗ Buzzer Manager FALLÓ"));
+        LOG_E("   ✗ Buzzer Manager FALLÓ");
         allOk = false;
     }
 
     // Display Manager
     if (displayManager.init() == Result::SUCCESS)
     {
-        Serial.println(F("   ✓ Display Manager OK"));
+        LOG_I("   ✓ Display Manager OK");
         displayManager.showSplashScreen();
     }
     else
     {
-        Serial.println(F("   ✗ Display Manager FALLÓ"));
+        LOG_E("   ✗ Display Manager FALLÓ");
         allOk = false;
     }
 
     // GPS Manager
     if (gpsManager.init() == Result::SUCCESS)
     {
-        Serial.println(F("   ✓ GPS Manager OK"));
+        LOG_I("   ✓ GPS Manager OK");
     }
     else
     {
-        Serial.println(F("   ✗ GPS Manager FALLÓ"));
+        LOG_E("   ✗ GPS Manager FALLÓ");
         allOk = false;
     }
 
     // Geofence Manager
     if (geofenceManager.init() == Result::SUCCESS)
     {
-        Serial.println(F("   ✓ Geofence Manager OK"));
+        LOG_I("   ✓ Geofence Manager OK");
         Geofence gf = geofenceManager.getGeofence();
         if (gf.isConfigured)
         {
-            Serial.print(F("     → Geocerca cargada: "));
-            Serial.println(gf.name);
+            LOG_I("     → Geocerca cargada: ");
+            LOG_I(gf.name);
         }
         else
         {
-            Serial.println(F("     → Sin geocerca configurada"));
+            LOG_I("     → Sin geocerca configurada");
         }
     }
     else
     {
-        Serial.println(F("   ✗ Geofence Manager FALLÓ"));
+        LOG_E("   ✗ Geofence Manager FALLÓ");
         allOk = false;
     }
 
     // Alert Manager
     if (alertManager.init() == Result::SUCCESS)
     {
-        Serial.println(F("   ✓ Alert Manager OK"));
+        LOG_I("   ✓ Alert Manager OK");
     }
     else
     {
-        Serial.println(F("   ✗ Alert Manager FALLÓ"));
+        LOG_E("   ✗ Alert Manager FALLÓ");
         allOk = false;
     }
 
     // Radio Manager (más complejo)
-    Serial.println(F("   🔄 Inicializando Radio..."));
+    LOG_I("   🔄 Inicializando Radio...");
     if (radioManager.init() == Result::SUCCESS)
     {
-        Serial.println(F("   ✓ Radio inicializada"));
+        LOG_I("   ✓ Radio inicializada");
 
         if (radioManager.setupLoRaWAN() == Result::SUCCESS)
         {
-            Serial.println(F("   ✓ LoRaWAN configurado"));
+            LOG_I("   ✓ LoRaWAN configurado");
             radioManager.setGeofenceUpdateCallback(onGeofenceUpdate);
         }
         else
         {
-            Serial.println(F("   ✗ LoRaWAN configuración FALLÓ"));
+            LOG_E("   ✗ LoRaWAN configuración FALLÓ");
             allOk = false;
         }
     }
     else
     {
-        Serial.println(F("   ✗ Radio inicialización FALLÓ"));
+        LOG_E("   ✗ Radio inicialización FALLÓ");
         allOk = false;
     }
 
@@ -362,7 +327,7 @@ void updateGPS()
     {
         if (!gpsHasFix)
         {
-            Serial.println(F("🛰️ GPS FIX OBTENIDO!"));
+            LOG_I("🛰️ GPS FIX OBTENIDO!");
             blinkLED(2, 100);
         }
         gpsHasFix = true;
@@ -371,13 +336,11 @@ void updateGPS()
         // Log ocasional de posición
         static uint32_t lastGPSLog = 0;
         if (millis() - lastGPSLog > 30000)
-        { // Log cada 30 segundos
-            Serial.print(F("📍 Posición: "));
-            Serial.print(currentPosition.latitude, 6);
-            Serial.print(F(", "));
-            Serial.print(currentPosition.longitude, 6);
-            Serial.print(F(" | Sats: "));
-            Serial.println(gpsManager.getSatelliteCount());
+        {
+            LOG_I("📍 Posición: %.6f, %.6f | Sats: %d",
+                  currentPosition.latitude,
+                  currentPosition.longitude,
+                  gpsManager.getSatelliteCount());
             lastGPSLog = millis();
         }
     }
@@ -385,7 +348,7 @@ void updateGPS()
     {
         if (gpsHasFix)
         {
-            Serial.println(F("⚠️ GPS FIX PERDIDO"));
+            LOG_W("⚠️ GPS FIX PERDIDO");
         }
         gpsHasFix = false;
 
@@ -396,8 +359,8 @@ void updateGPS()
             uint8_t sats = gpsManager.getSatelliteCount();
             if (sats > 0)
             {
-                Serial.print(F("🛰️ Satélites visibles: "));
-                Serial.println(sats);
+                LOG_I("🛰️ Satélites visibles: ");
+                LOG_I("%d", sats);
             }
             lastSatLog = millis();
         }
@@ -594,22 +557,11 @@ void setup()
     // Inicializar Serial primero. Lo mantenemos por LEGACY
     Serial.begin(SERIAL_BAUD);
 
-    // Inicializar logger robusto
+    // Inicializar logger.
     Logger::init(SERIAL_BAUD);
 
-    // Esperar a que el Serial esté listo (con timeout)
-    uint32_t serialStart = millis();
-    while (!Serial && (millis() - serialStart < 5000))
-    {
-        delay(10);
-    }
-
-    // Pequeño delay para estabilizar
-    delay(2000);
-
-    // Mostrar banner
-    printBanner();
-    printSystemInfo();
+    // Mostrar información del sistema
+    Logger::printSystemInfo();
 
     // Inicializar hardware básico
     if (!initHardware())

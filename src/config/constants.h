@@ -2,7 +2,7 @@
  * ============================================================================
  * COLLAR BUENACABRA V3.0 - CONSTANTES DEL SISTEMA
  * ============================================================================
- * 
+ *
  * @file constants.h
  * @version 3.0.0
  */
@@ -42,15 +42,6 @@
 #define GPS_FIX_TIMEOUT 180000
 #define GPS_MIN_SATELLITES 4
 #define GPS_HDOP_THRESHOLD 2.0
-
-// ============================================================================
-// CONFIGURACIÓN DE BATERÍA
-// ============================================================================
-#define BATTERY_MIN_VOLTAGE 3.0
-#define BATTERY_MAX_VOLTAGE 4.2
-#define BATTERY_LOW_THRESHOLD 20
-#define BATTERY_CRITICAL_THRESHOLD 10
-#define BATTERY_ADC_SAMPLES 10
 
 // ============================================================================
 // CONFIGURACIÓN DE DISPLAY
