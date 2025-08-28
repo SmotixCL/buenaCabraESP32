@@ -1,7 +1,45 @@
 #include "RadioManager.h"
 #include "../core/Logger.h"
 #include <Preferences.h> // Para guardar configuración persistente
+// ============================================================================
+// DEFINICIONES DE COMPATIBILIDAD PARA RADIOLIB 6.6.0
+// ============================================================================
 
+#ifndef RADIOLIB_LORAWAN_NO_SESSION
+#define RADIOLIB_LORAWAN_NO_SESSION -1101
+#endif
+
+#ifndef RADIOLIB_ERR_NETWORK_NOT_JOINED
+#define RADIOLIB_ERR_NETWORK_NOT_JOINED -1102
+#endif
+
+#ifndef RADIOLIB_LORAWAN_INVALID_FPORT
+#define RADIOLIB_LORAWAN_INVALID_FPORT -1103
+#endif
+
+#ifndef RADIOLIB_LORAWAN_NO_DOWNLINK
+#define RADIOLIB_LORAWAN_NO_DOWNLINK -1104
+#endif
+
+#ifndef RADIOLIB_LORAWAN_INVALID_BUFFER_SIZE
+#define RADIOLIB_LORAWAN_INVALID_BUFFER_SIZE -1105
+#endif
+
+#ifndef RADIOLIB_ERR_INVALID_DATA_RATE
+#define RADIOLIB_ERR_INVALID_DATA_RATE -707
+#endif
+
+#ifndef RADIOLIB_ERR_NO_CHANNEL_AVAILABLE
+#define RADIOLIB_ERR_NO_CHANNEL_AVAILABLE -708
+#endif
+// Constantes adicionales que podrían ser útiles
+#ifndef RADIOLIB_LORAWAN_NEW_SESSION
+#define RADIOLIB_LORAWAN_NEW_SESSION 1
+#endif
+
+#ifndef RADIOLIB_LORAWAN_SESSION_RESTORED
+#define RADIOLIB_LORAWAN_SESSION_RESTORED 2
+#endif
 // ============================================================================
 // VARIABLE ESTÁTICA PARA INTERRUPT CALLBACK
 // ============================================================================
@@ -296,12 +334,15 @@ Result RadioManager::sendPacket(const uint8_t *data, size_t length, uint8_t port
 {
     if (!initialized || !joined)
     {
-        Serial.println("Error porque o initialized o joined son false");
+        LOG_E("❌ Error: Radio no inicializado o no unido a la red");
+        Serial.println("Error: initialized o joined son false");
         return Result::ERROR_INIT;
     }
+
     if (length > MAX_PAYLOAD_SIZE)
     {
-        Serial.println("Largo del payload demasiado");
+        LOG_E("❌ Error: Payload demasiado largo (%d bytes, máx %d)", length, MAX_PAYLOAD_SIZE);
+        Serial.println("Error: Largo del payload excede el máximo permitido");
         return Result::ERROR_INVALID_PARAM;
     }
 
@@ -310,62 +351,91 @@ Result RadioManager::sendPacket(const uint8_t *data, size_t length, uint8_t port
     // Copiar datos al buffer de transmisión
     memcpy(txBuffer, data, length);
 
-    LOG_D("📡 Enviando %d bytes en puerto %d", length, port);
+    LOG_I("📡 Enviando %d bytes en puerto %d", length, port);
 
-    // *** CORRECCIÓN PRINCIPAL: Usar sendReceive() en lugar de uplink() ***
-    uint8_t downlinkPayload[MAX_PAYLOAD_SIZE];
-    size_t downlinkSize = 0;
-    LoRaWANEvent_t uplinkDetails;
-    LoRaWANEvent_t downlinkDetails;
-
-    // Enviar uplink y verificar downlink en una sola operación
-    int16_t state = lorawan.sendReceive(txBuffer, length, port,
-                                        downlinkPayload, &downlinkSize,
-                                        confirmedUplinks, &uplinkDetails, &downlinkDetails);
-
-    if (state == RADIOLIB_ERR_NONE)
+    // Debug: mostrar contenido del buffer
+    Serial.print("📊 Buffer a enviar (hex): ");
+    for (size_t i = 0; i < length; i++)
     {
+        Serial.printf("%02X ", txBuffer[i]);
+    }
+    Serial.println();
+
+    // ============================================================================
+    // IMPLEMENTACIÓN CORRECTA PARA RADIOLIB 6.6.0
+    // ============================================================================
+
+    // El puerto se pasa como tercer parámetro a uplink()
+    // El cuarto parámetro indica si es confirmado (true) o no confirmado (false)
+    int16_t state = lorawan.uplink(txBuffer, length, port, confirmedUplinks);
+
+    // Verificar resultado del uplink
+    if (state == RADIOLIB_ERR_NONE || state == RADIOLIB_LORAWAN_NO_DOWNLINK)
+    {
+        // Transmisión exitosa
         packetsSent++;
         currentState = STATE_IDLE;
-        lastSuccessfulUplink = millis(); // Para persistencia de sesion: Actualizar timestamp del último uplink exitoso
-
-        // Obtener RSSI y SNR del último paquete
-        lastRSSI = radio.getRSSI();
-        lastSNR = radio.getSNR();
-
-        LOG_I("📡 Packet #%d enviado - RSSI: %.1fdBm, SNR: %.1fdB",
-              packetsSent, lastRSSI, lastSNR);
-
-        // ✅ ACTUALIZAR FRAME COUNTERS CORREGIDOS
+        lastSuccessfulUplink = millis();
         uplinkFrameCounter++;
         lastUplinkTime = millis();
 
-        // Guardar cada 10 transmisiones para no desgastar la flash
-        // EN TESTING CAMBIAMOS DE 10 A 2
+        // Obtener métricas de calidad del último paquete
+        lastRSSI = radio.getRSSI();
+        lastSNR = radio.getSNR();
+
+        LOG_I("✅ Packet #%d enviado exitosamente", packetsSent);
+        LOG_I("   RSSI: %.1f dBm, SNR: %.1f dB", lastRSSI, lastSNR);
+        LOG_I("   Frame Counter: %lu", uplinkFrameCounter);
+
+        // Guardar estado de sesión periódicamente
         if (packetsSent % 2 == 0)
         {
             saveSessionState();
         }
 
-        // Verificar si hay downlink
-        if (downlinkSize > 0)
+        // Verificar si hay downlink disponible
+        if (state == RADIOLIB_ERR_NONE)
         {
-            // ✅ ACTUALIZAR CONTADORES DE DOWNLINK
-            downlinkFrameCounter++;
-            lastDownlinkTime = millis();
+            // RadioLib 6.6.0: downlink() devuelve los datos si están disponibles
+            uint8_t downlinkPayload[MAX_PAYLOAD_SIZE];
+            size_t dlLen = sizeof(downlinkPayload);
 
-            // Copiar downlink al buffer de recepción
-            memcpy(rxBuffer, downlinkPayload, downlinkSize);
-            downlinkLength = downlinkSize;
-            downlinkPort = downlinkDetails.fPort;
-            pendingDownlink = true;
+            // Intentar recibir downlink
+            int16_t dlState = lorawan.downlink(downlinkPayload, &dlLen);
 
-            LOG_I("📡 Downlink #%d recibido: %d bytes en puerto %d",
-                  downlinkFrameCounter, downlinkSize, downlinkDetails.fPort);
+            if (dlState == RADIOLIB_ERR_NONE && dlLen > 0)
+            {
+                // Downlink recibido exitosamente
+                downlinkFrameCounter++;
+                lastDownlinkTime = millis();
 
-            // Procesar downlink inmediatamente
-            processDownlink(downlinkPayload, downlinkSize, downlinkDetails.fPort);
-            packetsReceived++;
+                // CORRECCIÓN #1: En RadioLib 6.6.0, el puerto del downlink está en el tercer parámetro
+                // Por defecto asumimos puerto 10 para geocercas o el que uses en tu backend
+                uint8_t dlPort = 10; // Puerto fijo para geocercas
+                // Alternativamente, si el backend envía el puerto como primer byte:
+                // uint8_t dlPort = (dlLen > 0) ? downlinkPayload[0] : 0;
+
+                // Copiar downlink al buffer de recepción
+                memcpy(rxBuffer, downlinkPayload, dlLen);
+                downlinkLength = dlLen;
+                downlinkPort = dlPort;
+                pendingDownlink = true;
+
+                LOG_I("📥 Downlink #%d recibido: %d bytes en puerto %d",
+                      downlinkFrameCounter, dlLen, dlPort);
+
+                // Debug: mostrar contenido del downlink
+                Serial.print("📊 Downlink recibido (hex): ");
+                for (size_t i = 0; i < dlLen; i++)
+                {
+                    Serial.printf("%02X ", downlinkPayload[i]);
+                }
+                Serial.println();
+
+                // Procesar downlink inmediatamente
+                processDownlink(downlinkPayload, dlLen, dlPort);
+                packetsReceived++;
+            }
         }
 
         if (txCallback)
@@ -377,15 +447,75 @@ Result RadioManager::sendPacket(const uint8_t *data, size_t length, uint8_t port
     }
     else
     {
+        // Error en el envío
         packetsLost++;
         currentState = STATE_ERROR;
-        LOG_E("❌ Error enviando packet: %s", getErrorString(state));
+
+        // Diagnóstico detallado del error
+        LOG_E("❌ Error enviando packet: %d (%s)", state, getErrorString(state));
+
+        // CORRECCIÓN #2: Usar las constantes correctas de RadioLib 6.6.0
+        switch (state)
+        {
+        case RADIOLIB_ERR_TX_TIMEOUT:
+            Serial.println("⏱️ Error: Timeout de transmisión - El canal puede estar ocupado");
+            break;
+
+        // En RadioLib 6.6.0, el error de no joined es diferente
+        case RADIOLIB_LORAWAN_NO_SESSION:
+            Serial.println("🔌 Error: No hay sesión LoRaWAN activa - Requiere nuevo JOIN");
+            joined = false; // Marcar como no unido para forzar rejoin
+            break;
+
+        case RADIOLIB_ERR_INVALID_PORT:
+            Serial.printf("🔢 Error: Puerto inválido (%d) - Use puertos 1-223\n", port);
+            break;
+
+        case RADIOLIB_ERR_PACKET_TOO_LONG:
+            Serial.printf("📏 Error: Paquete muy largo (%d bytes) para el DR actual\n", length);
+            break;
+
+        case RADIOLIB_ERR_INVALID_FREQUENCY:
+            Serial.println("📻 Error: Frecuencia inválida para la región AU915");
+            break;
+
+        case RADIOLIB_ERR_NO_CHANNEL_AVAILABLE:
+            Serial.println("📡 Error: Sin canal disponible - Todos los canales están en cooldown");
+            break;
+
+        // Errores adicionales de RadioLib 6.6.0
+        case RADIOLIB_ERR_INVALID_DATA_RATE:
+            Serial.println("📊 Error: Data Rate inválido para la región");
+            break;
+
+        case RADIOLIB_LORAWAN_INVALID_FPORT:
+            Serial.printf("🔢 Error: Puerto F (%d) fuera de rango válido\n", port);
+            break;
+
+        case RADIOLIB_LORAWAN_INVALID_BUFFER_SIZE:
+            Serial.println("💾 Error: Tamaño de buffer inválido");
+            break;
+
+        default:
+            Serial.printf("❓ Error desconocido: %d - %s\n", state, getErrorString(state));
+            // Imprimir información adicional para debugging
+            Serial.println("\n🔍 Información de diagnóstico:");
+            Serial.printf("   - Estado del manager: %s\n", getStateString());
+            Serial.printf("   - Join status: %s\n", joined ? "JOINED" : "NOT JOINED");
+            Serial.printf("   - Initialized: %s\n", initialized ? "YES" : "NO");
+            Serial.printf("   - Frame Counter Up: %lu\n", uplinkFrameCounter);
+            Serial.printf("   - Tiempo desde último uplink exitoso: %lu segundos\n",
+                          (millis() - lastSuccessfulUplink) / 1000);
+            Serial.printf("   - Puerto usado: %d\n", port);
+            Serial.printf("   - Tamaño del payload: %d bytes\n", length);
+            break;
+        }
 
         if (txCallback)
         {
             txCallback(false);
         }
-        Serial.println("Paquete perdido (No es error del largo)");
+
         return Result::ERROR_COMMUNICATION;
     }
 }
@@ -1242,10 +1372,29 @@ const char *RadioManager::getErrorString(int16_t errorCode)
         return "TX timeout";
     case RADIOLIB_ERR_RX_TIMEOUT:
         return "RX timeout";
+    case RADIOLIB_ERR_PACKET_TOO_LONG:
+        return "Paquete muy largo";
+    case RADIOLIB_ERR_INVALID_DATA_RATE:
+        return "Data rate inválido";
+    case RADIOLIB_ERR_NO_CHANNEL_AVAILABLE:
+        return "Sin canal disponible";
+    case RADIOLIB_ERR_INVALID_PORT:
+        return "Puerto inválido";
+    case RADIOLIB_ERR_NETWORK_NOT_JOINED:
+        return "Red no unida";
+
+    // Códigos específicos de LoRaWAN
     case RADIOLIB_LORAWAN_NEW_SESSION:
         return "Nueva sesión LoRaWAN";
     case RADIOLIB_LORAWAN_SESSION_RESTORED:
         return "Sesión LoRaWAN restaurada";
+    case RADIOLIB_LORAWAN_NO_DOWNLINK:
+        return "Sin downlink disponible";
+    case RADIOLIB_LORAWAN_INVALID_FPORT:
+        return "Puerto F inválido";
+    case RADIOLIB_LORAWAN_INVALID_BUFFER_SIZE:
+        return "Buffer insuficiente";
+
     default:
         return "Error desconocido";
     }
