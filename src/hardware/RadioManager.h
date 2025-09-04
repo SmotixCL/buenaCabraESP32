@@ -68,10 +68,12 @@ public:
     Result joinOTAA(const uint8_t *devEUI, const uint8_t *appEUI, const uint8_t *appKey);
     Result joinABP(const uint8_t *devAddr, const uint8_t *nwkSKey, const uint8_t *appSKey);
     bool isJoined() const;
+    bool isSessionRestored() const;
     Result forceRejoin();
 
     // Transmisión de datos
     Result sendPacket(const uint8_t *data, size_t length, uint8_t port = 1);
+    void handleDownlink();
     Result sendString(const String &message, uint8_t port = 1);
     Result sendPosition(const Position &position, AlertLevel alertLevel = AlertLevel::SAFE);
     Result sendBatteryStatus(const BatteryStatus &battery);
@@ -147,7 +149,6 @@ private:
     // NUEVO: Contadores de frame para verificación
     uint16_t uplinkFrameCounter;
     uint16_t downlinkFrameCounter;
-    uint32_t lastUplinkTime;
     uint32_t lastDownlinkTime;
 
     // Configuración LoRaWAN
@@ -212,14 +213,11 @@ private:
     const char *getErrorString(int16_t errorCode);
 
     // Nuevos métodos para persistencia de sesión
-    bool saveSessionState();
-    bool loadSessionState();
-    bool isSessionValid();
-    void clearSessionState();
+    bool savePersistentSession();
+    bool loadPersistentSession();
+    void clearPersistentSession();
 
     // Variables para tracking de sesión
-    uint32_t sessionStartTime;
-    uint32_t lastSuccessfulUplink;
     bool sessionRestored;
 };
 

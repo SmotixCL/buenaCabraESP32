@@ -40,6 +40,15 @@
 #ifndef RADIOLIB_LORAWAN_SESSION_RESTORED
 #define RADIOLIB_LORAWAN_SESSION_RESTORED 2
 #endif
+
+// ============================================================================
+// CONSTANTES DE PERSISTENCIA
+// ============================================================================
+#define PREFS_NAMESPACE_NONCES "lw_nonces"
+#define PREFS_NAMESPACE_SESSION "lw_session"
+#define PREFS_KEY_NONCES_BUFFER "nonces_buf"
+#define PREFS_KEY_SESSION_BUFFER "session_buf"
+
 // ============================================================================
 // VARIABLE ESTÁTICA PARA INTERRUPT CALLBACK
 // ============================================================================
@@ -61,14 +70,12 @@ RadioManager::RadioManager(uint8_t nss, uint8_t dio1, uint8_t rst, uint8_t busy)
                                                                                    currentState(STATE_IDLE),
                                                                                    packetsSent(0), packetsReceived(0), packetsLost(0),
                                                                                    lastRSSI(0), lastSNR(0),
-                                                                                   uplinkFrameCounter(0), downlinkFrameCounter(0),
-                                                                                   lastUplinkTime(0), lastDownlinkTime(0),
+                                                                                   uplinkFrameCounter(0), downlinkFrameCounter(0), lastDownlinkTime(0),
                                                                                    currentDataRate(0), currentTxPower(20),
                                                                                    adrEnabled(true), confirmedUplinks(false),
                                                                                    downlinkCallback(nullptr), joinCallback(nullptr), txCallback(nullptr),
                                                                                    pendingDownlink(false), downlinkLength(0), downlinkPort(0),
-                                                                                   // Inicialización de variables para persistir sesión
-                                                                                   sessionStartTime(0), lastSuccessfulUplink(0), sessionRestored(false)
+                                                                                   sessionRestored(false)
 {
     instance = this;
 }
@@ -97,19 +104,6 @@ Result RadioManager::init()
 
     // Configurar interrupt
     radio.setDio1Action(onDio1Action);
-
-    // Intentamos cargar la sesión previa, en caso de existir
-    if (loadSessionState())
-    {
-        LOG_I("📡 Sesión LoRaWAN previa encontrada y válida");
-        joined = true;
-        currentState = STATE_JOINED;
-        sessionRestored = true;
-    }
-    else
-    {
-        LOG_I("📡 Sin sesión previa válida, se requerirá nuevo JOIN");
-    }
 
     initialized = true;
     currentState = STATE_IDLE;
@@ -172,27 +166,18 @@ Result RadioManager::setupLoRaWAN()
     return Result::SUCCESS;
 }
 
-// joinOTAA Nuevo: Manejo de persistencia de sesion en resets
+// ============================================================================
+// IMPLEMENTACIÓN CORRECTA DE OTAA CON PERSISTENCIA
+// ============================================================================
+
 Result RadioManager::joinOTAA(const uint8_t *devEUI, const uint8_t *appEUI, const uint8_t *appKey)
 {
     if (!initialized)
-        return Result::ERROR_INIT;
-
-    // Si ya tenemos una sesión válida restaurada, no hacer join
-    if (sessionRestored && joined && isSessionValid())
     {
-        LOG_I("📡 Usando sesión LoRaWAN restaurada, evitando rejoin");
-        currentState = STATE_JOINED;
-        if (joinCallback)
-        {
-            joinCallback(true);
-        }
-        return Result::SUCCESS;
+        return Result::ERROR_INIT;
     }
 
-    // Si no tenemos una sesión válida continuamos
-    LOG_I("📡 Iniciando nuevo OTAA Join...");
-    currentState = STATE_JOINING;
+    LOG_I("📡 Iniciando proceso OTAA...");
 
     // Convertir arrays de EUI a uint64_t (little endian)
     uint64_t joinEUI_le = 0, devEUI_le = 0;
@@ -207,52 +192,254 @@ Result RadioManager::joinOTAA(const uint8_t *devEUI, const uint8_t *appEUI, cons
     memcpy(nwkKey, appKey, 16);
     memcpy(appKeyLocal, appKey, 16);
 
-    // Configurar parámetros para el Join
+    // PASO 1: Configurar credenciales OTAA
     lorawan.beginOTAA(joinEUI_le, devEUI_le, nwkKey, appKeyLocal);
 
-    // Intentar el Join
-    int16_t state = lorawan.activateOTAA();
-
-    if (state == RADIOLIB_LORAWAN_NEW_SESSION || state == RADIOLIB_LORAWAN_SESSION_RESTORED)
+    // PASO 2: Intentar restaurar sesión persistente ANTES de activar
+    bool sessionLoaded = false;
+    if (loadPersistentSession())
     {
-        joined = true;
-        currentState = STATE_JOINED;
-        sessionStartTime = millis();
-        lastSuccessfulUplink = millis();
-        sessionRestored = false; // Es una sesión nueva/fresca
-
-        LOG_I("✅ OTAA Join exitoso!");
-
-        // Guardar estado de sesión
-        if (saveSessionState())
-        {
-            LOG_I("📄 Estado de sesión guardado");
-        }
-        else
-        {
-            LOG_W("⚠️ Error guardando estado de sesión");
-        }
-
-        if (joinCallback)
-        {
-            joinCallback(true);
-        }
-        return Result::SUCCESS;
+        LOG_I("📡 Buffers de sesión cargados desde NVS");
+        sessionLoaded = true;
     }
     else
     {
-        LOG_E("❌ OTAA Join falló. Código: %d (%s)", state, getErrorString(state));
-        currentState = STATE_ERROR;
+        LOG_I("📡 Sin sesión previa válida, procederemos con nuevo JOIN");
+    }
 
-        // Limpiar cualquier sesión inválida
-        clearSessionState();
+    // PASO 3: Activar OTAA (join o restaurar sesión)
+    currentState = STATE_JOINING;
+    LoRaWANJoinEvent_t joinEvent;
+    int16_t state = lorawan.activateOTAA(RADIOLIB_LORAWAN_DATA_RATE_UNUSED, &joinEvent);
+
+    // PASO 4: Evaluar resultado
+    switch (state)
+    {
+    case RADIOLIB_LORAWAN_NEW_SESSION:
+        LOG_I("✅ Nueva sesión OTAA creada exitosamente");
+        joined = true;
+        currentState = STATE_JOINED;
+        sessionRestored = false;
+
+        // Guardar nueva sesión inmediatamente
+        if (!savePersistentSession())
+        {
+            LOG_W("⚠️ Error guardando nueva sesión");
+        }
 
         if (joinCallback)
-        {
+            joinCallback(true);
+        return Result::SUCCESS;
+
+    case RADIOLIB_LORAWAN_SESSION_RESTORED:
+        LOG_I("✅ Sesión LoRaWAN restaurada exitosamente");
+        joined = true;
+        currentState = STATE_JOINED;
+        sessionRestored = true;
+
+        if (joinCallback)
+            joinCallback(true);
+        return Result::SUCCESS;
+
+    case RADIOLIB_ERR_JOIN_NONCE_INVALID:
+        LOG_E("❌ JoinNonce inválido - posible replay attack");
+        // Limpiar sesión corrupta y reintentar
+        clearPersistentSession();
+        currentState = STATE_ERROR;
+        if (joinCallback)
             joinCallback(false);
-        }
+        return Result::ERROR_COMMUNICATION;
+
+    case RADIOLIB_ERR_CRC_MISMATCH:
+        LOG_E("❌ MIC inválido en Join Accept");
+        currentState = STATE_ERROR;
+        if (joinCallback)
+            joinCallback(false);
+        return Result::ERROR_COMMUNICATION;
+
+    default:
+        LOG_E("❌ OTAA Join falló. Código: %d (%s)", state, getErrorString(state));
+        currentState = STATE_ERROR;
+        if (joinCallback)
+            joinCallback(false);
         return Result::ERROR_COMMUNICATION;
     }
+}
+
+// ============================================================================
+// PERSISTENCIA CORRECTA DE SESIÓN LORAWAN
+// ============================================================================
+
+bool RadioManager::savePersistentSession()
+{
+    if (!lorawan.isActivated())
+    {
+        LOG_W("⚠️ No hay sesión activa para guardar");
+        return false;
+    }
+
+    LOG_D("💾 Guardando sesión LoRaWAN en NVS...");
+
+    // PASO 1: Obtener buffers de RadioLib
+    uint8_t *noncesBuffer = lorawan.getBufferNonces();
+    uint8_t *sessionBuffer = lorawan.getBufferSession();
+
+    if (!noncesBuffer || !sessionBuffer)
+    {
+        LOG_E("❌ Error obteniendo buffers de RadioLib");
+        return false;
+    }
+
+    // PASO 2: Guardar buffer de Nonces
+    Preferences prefsNonces;
+    if (!prefsNonces.begin(PREFS_NAMESPACE_NONCES, false))
+    {
+        LOG_E("❌ Error abriendo namespace nonces");
+        return false;
+    }
+
+    size_t noncesSize = prefsNonces.putBytes(PREFS_KEY_NONCES_BUFFER,
+                                             noncesBuffer,
+                                             RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
+    prefsNonces.end();
+
+    if (noncesSize != RADIOLIB_LORAWAN_NONCES_BUF_SIZE)
+    {
+        LOG_E("❌ Error guardando buffer nonces: %d/%d bytes",
+              noncesSize, RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
+        return false;
+    }
+
+    // PASO 3: Guardar buffer de Session
+    Preferences prefsSession;
+    if (!prefsSession.begin(PREFS_NAMESPACE_SESSION, false))
+    {
+        LOG_E("❌ Error abriendo namespace session");
+        return false;
+    }
+
+    size_t sessionSize = prefsSession.putBytes(PREFS_KEY_SESSION_BUFFER,
+                                               sessionBuffer,
+                                               RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+    prefsSession.end();
+
+    if (sessionSize != RADIOLIB_LORAWAN_SESSION_BUF_SIZE)
+    {
+        LOG_E("❌ Error guardando buffer session: %d/%d bytes",
+              sessionSize, RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+        return false;
+    }
+
+    LOG_I("✅ Sesión LoRaWAN guardada exitosamente");
+    LOG_D("   Nonces: %d bytes, Session: %d bytes", noncesSize, sessionSize);
+
+    return true;
+}
+
+void RadioManager::clearPersistentSession()
+{
+    LOG_I("🗑️ Limpiando sesión persistente...");
+
+    // Limpiar namespace de nonces
+    Preferences prefsNonces;
+    if (prefsNonces.begin(PREFS_NAMESPACE_NONCES, false))
+    {
+        prefsNonces.clear();
+        prefsNonces.end();
+    }
+
+    // Limpiar namespace de session
+    Preferences prefsSession;
+    if (prefsSession.begin(PREFS_NAMESPACE_SESSION, false))
+    {
+        prefsSession.clear();
+        prefsSession.end();
+    }
+
+    // Reset variables locales
+    joined = false;
+    sessionRestored = false;
+    currentState = STATE_IDLE;
+
+    LOG_I("✅ Sesión persistente limpiada");
+}
+
+bool RadioManager::loadPersistentSession()
+{
+    LOG_D("📁 Cargando sesión LoRaWAN desde NVS...");
+
+    uint8_t noncesBuffer[RADIOLIB_LORAWAN_NONCES_BUF_SIZE];
+    uint8_t sessionBuffer[RADIOLIB_LORAWAN_SESSION_BUF_SIZE];
+
+    // PASO 1: Cargar buffer de Nonces
+    Preferences prefsNonces;
+    if (!prefsNonces.begin(PREFS_NAMESPACE_NONCES, true))
+    {
+        LOG_D("📁 No existe namespace nonces");
+        return false;
+    }
+
+    size_t noncesSize = prefsNonces.getBytes(PREFS_KEY_NONCES_BUFFER,
+                                             noncesBuffer,
+                                             RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
+    prefsNonces.end();
+
+    if (noncesSize != RADIOLIB_LORAWAN_NONCES_BUF_SIZE)
+    {
+        LOG_D("📁 Buffer nonces inválido: %d bytes", noncesSize);
+        return false;
+    }
+
+    // PASO 2: Cargar buffer de Session
+    Preferences prefsSession;
+    if (!prefsSession.begin(PREFS_NAMESPACE_SESSION, true))
+    {
+        LOG_D("📁 No existe namespace session");
+        return false;
+    }
+
+    size_t sessionSize = prefsSession.getBytes(PREFS_KEY_SESSION_BUFFER,
+                                               sessionBuffer,
+                                               RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+    prefsSession.end();
+
+    if (sessionSize != RADIOLIB_LORAWAN_SESSION_BUF_SIZE)
+    {
+        LOG_D("📁 Buffer session inválido: %d bytes", sessionSize);
+        return false;
+    }
+
+    // PASO 3: Restaurar buffers en RadioLib
+    int16_t noncesResult = lorawan.setBufferNonces(noncesBuffer);
+    if (noncesResult != RADIOLIB_ERR_NONE)
+    {
+        LOG_W("⚠️ Error restaurando nonces: %d (%s)", noncesResult, getErrorString(noncesResult));
+
+        if (noncesResult == RADIOLIB_LORAWAN_NONCES_DISCARDED)
+        {
+            LOG_W("⚠️ Nonces descartados - configuración cambió");
+            clearPersistentSession();
+            return false;
+        }
+        return false;
+    }
+
+    int16_t sessionResult = lorawan.setBufferSession(sessionBuffer);
+    if (sessionResult != RADIOLIB_ERR_NONE)
+    {
+        LOG_W("⚠️ Error restaurando session: %d (%s)", sessionResult, getErrorString(sessionResult));
+
+        if (sessionResult == RADIOLIB_LORAWAN_SESSION_DISCARDED)
+        {
+            LOG_W("⚠️ Session descartada - no coincide con nonces");
+            clearPersistentSession();
+            return false;
+        }
+        return false;
+    }
+
+    LOG_I("✅ Buffers de sesión restaurados exitosamente");
+    return true;
 }
 
 Result RadioManager::joinABP(const uint8_t *devAddr, const uint8_t *nwkSKey, const uint8_t *appSKey)
@@ -314,7 +501,12 @@ Result RadioManager::joinABP(const uint8_t *devAddr, const uint8_t *nwkSKey, con
 
 bool RadioManager::isJoined() const
 {
-    return joined;
+    return joined && const_cast<LoRaWANNode &>(lorawan).isActivated();
+}
+
+bool RadioManager::isSessionRestored() const
+{
+    return sessionRestored;
 }
 
 // ============================================================================
@@ -335,14 +527,12 @@ Result RadioManager::sendPacket(const uint8_t *data, size_t length, uint8_t port
     if (!initialized || !joined)
     {
         LOG_E("❌ Error: Radio no inicializado o no unido a la red");
-        Serial.println("Error: initialized o joined son false");
         return Result::ERROR_INIT;
     }
 
     if (length > MAX_PAYLOAD_SIZE)
     {
         LOG_E("❌ Error: Payload demasiado largo (%d bytes, máx %d)", length, MAX_PAYLOAD_SIZE);
-        Serial.println("Error: Largo del payload excede el máximo permitido");
         return Result::ERROR_INVALID_PARAM;
     }
 
@@ -352,14 +542,6 @@ Result RadioManager::sendPacket(const uint8_t *data, size_t length, uint8_t port
     memcpy(txBuffer, data, length);
 
     LOG_I("📡 Enviando %d bytes en puerto %d", length, port);
-
-    // Debug: mostrar contenido del buffer
-    Serial.print("📊 Buffer a enviar (hex): ");
-    for (size_t i = 0; i < length; i++)
-    {
-        Serial.printf("%02X ", txBuffer[i]);
-    }
-    Serial.println();
 
     // ============================================================================
     // IMPLEMENTACIÓN CORRECTA PARA RADIOLIB 6.6.0
@@ -375,9 +557,7 @@ Result RadioManager::sendPacket(const uint8_t *data, size_t length, uint8_t port
         // Transmisión exitosa
         packetsSent++;
         currentState = STATE_IDLE;
-        lastSuccessfulUplink = millis();
         uplinkFrameCounter++;
-        lastUplinkTime = millis();
 
         // Obtener métricas de calidad del último paquete
         lastRSSI = radio.getRSSI();
@@ -387,55 +567,19 @@ Result RadioManager::sendPacket(const uint8_t *data, size_t length, uint8_t port
         LOG_I("   RSSI: %.1f dBm, SNR: %.1f dB", lastRSSI, lastSNR);
         LOG_I("   Frame Counter: %lu", uplinkFrameCounter);
 
-        // Guardar estado de sesión periódicamente
+        // PERSISTENCIA AUTOMÁTICA: Guardar sesión cada N paquetes
         if (packetsSent % 2 == 0)
-        {
-            saveSessionState();
+        { // Cada 2 paquetes
+            if (!savePersistentSession())
+            {
+                LOG_W("⚠️ Error guardando sesión después del uplink");
+            }
         }
 
-        // Verificar si hay downlink disponible
+        // Verificar downlink si está disponible
         if (state == RADIOLIB_ERR_NONE)
         {
-            // RadioLib 6.6.0: downlink() devuelve los datos si están disponibles
-            uint8_t downlinkPayload[MAX_PAYLOAD_SIZE];
-            size_t dlLen = sizeof(downlinkPayload);
-
-            // Intentar recibir downlink
-            int16_t dlState = lorawan.downlink(downlinkPayload, &dlLen);
-
-            if (dlState == RADIOLIB_ERR_NONE && dlLen > 0)
-            {
-                // Downlink recibido exitosamente
-                downlinkFrameCounter++;
-                lastDownlinkTime = millis();
-
-                // CORRECCIÓN #1: En RadioLib 6.6.0, el puerto del downlink está en el tercer parámetro
-                // Por defecto asumimos puerto 10 para geocercas o el que uses en tu backend
-                uint8_t dlPort = 10; // Puerto fijo para geocercas
-                // Alternativamente, si el backend envía el puerto como primer byte:
-                // uint8_t dlPort = (dlLen > 0) ? downlinkPayload[0] : 0;
-
-                // Copiar downlink al buffer de recepción
-                memcpy(rxBuffer, downlinkPayload, dlLen);
-                downlinkLength = dlLen;
-                downlinkPort = dlPort;
-                pendingDownlink = true;
-
-                LOG_I("📥 Downlink #%d recibido: %d bytes en puerto %d",
-                      downlinkFrameCounter, dlLen, dlPort);
-
-                // Debug: mostrar contenido del downlink
-                Serial.print("📊 Downlink recibido (hex): ");
-                for (size_t i = 0; i < dlLen; i++)
-                {
-                    Serial.printf("%02X ", downlinkPayload[i]);
-                }
-                Serial.println();
-
-                // Procesar downlink inmediatamente
-                processDownlink(downlinkPayload, dlLen, dlPort);
-                packetsReceived++;
-            }
+            handleDownlink();
         }
 
         if (txCallback)
@@ -504,8 +648,6 @@ Result RadioManager::sendPacket(const uint8_t *data, size_t length, uint8_t port
             Serial.printf("   - Join status: %s\n", joined ? "JOINED" : "NOT JOINED");
             Serial.printf("   - Initialized: %s\n", initialized ? "YES" : "NO");
             Serial.printf("   - Frame Counter Up: %lu\n", uplinkFrameCounter);
-            Serial.printf("   - Tiempo desde último uplink exitoso: %lu segundos\n",
-                          (millis() - lastSuccessfulUplink) / 1000);
             Serial.printf("   - Puerto usado: %d\n", port);
             Serial.printf("   - Tamaño del payload: %d bytes\n", length);
             break;
@@ -517,6 +659,40 @@ Result RadioManager::sendPacket(const uint8_t *data, size_t length, uint8_t port
         }
 
         return Result::ERROR_COMMUNICATION;
+    }
+}
+
+// ===========================================
+// Manejo de Downlink. Utilizado en sendPacket
+// ===========================================
+void RadioManager::handleDownlink()
+{
+    uint8_t downlinkPayload[MAX_PAYLOAD_SIZE];
+    size_t dlLen = sizeof(downlinkPayload);
+
+    int16_t dlState = lorawan.downlink(downlinkPayload, &dlLen);
+
+    if (dlState == RADIOLIB_ERR_NONE && dlLen > 0)
+    {
+        packetsReceived++;
+
+        // En RadioLib, el puerto viene como parte del downlink
+        // Para simplificar, asumimos puerto 10 para geocercas
+        uint8_t dlPort = 10;
+
+        // Copiar al buffer de recepción
+        memcpy(rxBuffer, downlinkPayload, dlLen);
+        downlinkLength = dlLen;
+        downlinkPort = dlPort;
+        pendingDownlink = true;
+
+        LOG_I("📥 Downlink recibido: %d bytes en puerto %d", dlLen, dlPort);
+
+        // Procesar inmediatamente
+        processDownlink(downlinkPayload, dlLen, dlPort);
+
+        // Guardar sesión después de downlink (pueden haber comandos MAC)
+        savePersistentSession();
     }
 }
 
@@ -593,131 +769,20 @@ void RadioManager::processDownlinks()
     }
 }
 
-// ===========================================
-// NUEVOS MÉTODOS PARA GESTIÓN DE PERSISTENCIA
-// ===========================================
-bool RadioManager::saveSessionState()
-{
-    Preferences prefs;
-    if (!prefs.begin("lorawan_session", false))
-    {
-        return false;
-    }
-
-    // Guardar estado básico de sesión
-    prefs.putBool("joined", joined);
-    prefs.putULong("session_start", sessionStartTime);
-    prefs.putULong("last_uplink", lastSuccessfulUplink);
-    prefs.putULong("uplink_fcnt", uplinkFrameCounter);
-    prefs.putULong("downlink_fcnt", downlinkFrameCounter);
-    prefs.putUShort("packets_sent", packetsSent);
-
-    // Checksum simple para validar integridad
-    uint32_t checksum = sessionStartTime ^ lastSuccessfulUplink ^ uplinkFrameCounter;
-    prefs.putULong("checksum", checksum);
-
-    prefs.end();
-    LOG_D("💾 Sesión guardada: FCnt=%lu, Packets=%d", uplinkFrameCounter, packetsSent);
-    return true;
-}
-
-bool RadioManager::loadSessionState()
-{
-    Preferences prefs;
-    if (!prefs.begin("lorawan_session", true))
-    {
-        return false;
-    }
-
-    // Cargar datos de sesión
-    bool wasJoined = prefs.getBool("joined", false);
-    uint32_t savedSessionStart = prefs.getULong("session_start", 0);
-    uint32_t savedLastUplink = prefs.getULong("last_uplink", 0);
-    uint32_t savedUplinkFcnt = prefs.getULong("uplink_fcnt", 0);
-    uint32_t savedDownlinkFcnt = prefs.getULong("downlink_fcnt", 0);
-    uint16_t savedPacketsSent = prefs.getUShort("packets_sent", 0);
-    uint32_t savedChecksum = prefs.getULong("checksum", 0);
-
-    prefs.end();
-
-    // Validar integridad
-    uint32_t calculatedChecksum = savedSessionStart ^ savedLastUplink ^ savedUplinkFcnt;
-    if (savedChecksum != calculatedChecksum)
-    {
-        LOG_W("⚠️ Checksum de sesión inválido, datos corruptos");
-        return false;
-    }
-
-    // Verificar si la sesión no es demasiado antigua
-    if (!wasJoined || savedSessionStart == 0)
-    {
-        LOG_I("📡 Sin sesión LoRaWAN previa válida");
-        return false;
-    }
-
-    // Restaurar variables de estado
-    sessionStartTime = savedSessionStart;
-    lastSuccessfulUplink = savedLastUplink;
-    uplinkFrameCounter = savedUplinkFcnt;
-    downlinkFrameCounter = savedDownlinkFcnt;
-    packetsSent = savedPacketsSent;
-
-    LOG_I("📡 Sesión cargada: FCnt=%lu, Packets=%d, Edad=%lu min",
-          uplinkFrameCounter, packetsSent, (millis() - lastSuccessfulUplink) / 60000);
-
-    return true;
-}
-
-// clearSession is unused
-void RadioManager::clearSessionState()
-{
-    Preferences prefs;
-    if (prefs.begin("lorawan_session", false))
-    {
-        prefs.clear();
-        prefs.end();
-        LOG_D("🗑️ Estado de sesión limpiado");
-    }
-
-    // Reset de variables locales
-    sessionStartTime = 0;
-    lastSuccessfulUplink = 0;
-    sessionRestored = false;
-    joined = false;
-}
-
-bool RadioManager::isSessionValid()
-{
-    uint32_t now = millis();
-
-    // Sesión válida si:
-    // 1. No es demasiado antigua (< 24 horas desde último uplink)
-    // 2. La sesión fue iniciada (sessionStartTime > 0)
-    uint32_t maxSessionAge = 24 * 60 * 60 * 1000; // 24 horas en ms
-
-    if (sessionStartTime == 0)
-    {
-        return false;
-    }
-
-    uint32_t timeSinceLastUplink = now - lastSuccessfulUplink;
-    if (timeSinceLastUplink > maxSessionAge)
-    {
-        LOG_W("⚠️ Sesión demasiado antigua (%lu min), se requiere rejoin",
-              timeSinceLastUplink / 60000);
-        return false;
-    }
-
-    return true;
-}
-
 // NUEVO MÉTODO PÚBLICO PARA FORZAR REJOIN
 Result RadioManager::forceRejoin()
 {
     LOG_I("🔄 Forzando rejoin LoRaWAN...");
-    clearSessionState();
+
+    clearPersistentSession();
     joined = false;
+    sessionRestored = false;
     currentState = STATE_IDLE;
+
+    // Limpiar el estado interno de RadioLib
+    // lorawan.clearNonces(); // NO FUNCIONABA PORQUE EL MÉTODO PARECE INACCESIBLE
+    lorawan.clearSession();
+
     return Result::SUCCESS;
 }
 
@@ -1388,6 +1453,14 @@ const char *RadioManager::getErrorString(int16_t errorCode)
         return "Nueva sesión LoRaWAN";
     case RADIOLIB_LORAWAN_SESSION_RESTORED:
         return "Sesión LoRaWAN restaurada";
+    case RADIOLIB_LORAWAN_NONCES_DISCARDED:
+        return "Nonces descartados";
+    case RADIOLIB_LORAWAN_SESSION_DISCARDED:
+        return "Sesión descartada";
+    case RADIOLIB_ERR_JOIN_NONCE_INVALID:
+        return "JoinNonce inválido";
+    case RADIOLIB_ERR_CRC_MISMATCH:
+        return "MIC inválido";
     case RADIOLIB_LORAWAN_NO_DOWNLINK:
         return "Sin downlink disponible";
     case RADIOLIB_LORAWAN_INVALID_FPORT:
