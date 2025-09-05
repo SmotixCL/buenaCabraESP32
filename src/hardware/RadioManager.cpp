@@ -1240,6 +1240,10 @@ void RadioManager::parseGeofenceCommand(const uint8_t *data, size_t length)
         // Polígono
         parsePolygonGeofence(data, length);
     }
+    else if (geofenceType == 2)
+    {
+        parseCompressedPolygonGeofence(data, length);
+    }
     else
     {
         LOG_W("⚠️ Tipo de geocerca desconocido: %d", geofenceType);
@@ -1300,6 +1304,7 @@ void RadioManager::parseCircleGeofence(const uint8_t *data, size_t length)
     }
 }
 
+// Función para parsear el payload de polygonGeofences NO comprimidos
 void RadioManager::parsePolygonGeofence(const uint8_t *data, size_t length)
 {
     // Formato: [tipo(1)][numPuntos(1)][lat1(4)][lng1(4)][lat2(4)][lng2(4)]...[groupId(N)]
@@ -1389,6 +1394,125 @@ void RadioManager::parsePolygonGeofence(const uint8_t *data, size_t length)
     }
 }
 
+// Función para parsear el payload de polygonGeofences comprimidas (AU915)
+void RadioManager::parseCompressedPolygonGeofence(const uint8_t *data, size_t length)
+{
+    // Formato comprimido: [tipo(1)][lat_ref(4)][lng_ref(4)][numPuntos(1)][offset_lat1(2)][offset_lng1(2)]...[groupId(N)]
+    // Mínimo: 1 + 4 + 4 + 1 + (3 puntos * 4 bytes) = 22 bytes
+    if (length < 22)
+    {
+        LOG_W("📡 Comando de geocerca comprimida muy corto: %d bytes", length);
+        return;
+    }
+
+    // Extraer punto de referencia (coordenadas de centroide)
+    float refLat, refLng;
+    memcpy(&refLat, &data[1], 4); // bytes 1-4
+    memcpy(&refLng, &data[5], 4); // bytes 5-8
+
+    // Extraer número de puntos
+    uint8_t numPoints = data[9]; // byte 9
+
+    if (numPoints < 3 || numPoints > 10)
+    {
+        LOG_W("⚠️ Número de puntos inválido en polígono comprimido: %d", numPoints);
+        return;
+    }
+
+    // Verificar que tengamos suficientes bytes para todos los puntos
+    size_t expectedMinLength = 10 + (numPoints * 4); // header + offsets
+    if (length < expectedMinLength)
+    {
+        LOG_W("📡 Comando de polígono comprimido incompleto: %d bytes, esperado mínimo %d",
+              length, expectedMinLength);
+        return;
+    }
+
+    LOG_I("🔷 GEOCERCA POLÍGONO COMPRIMIDO: %d puntos", numPoints);
+    LOG_I("  Punto de referencia: %.6f, %.6f", refLat, refLng);
+
+    // Factores de escala para conversión de metros a grados (optimizado para Chile)
+    const float LAT_SCALE_FACTOR = 111000.0f; // metros por grado de latitud
+    const float LNG_SCALE_FACTOR = 93000.0f;  // metros por grado de longitud (Chile)
+
+    // Extraer y descomprimir puntos del polígono
+    GeoPoint points[10];
+    size_t dataIndex = 10; // Comenzar después del header
+
+    for (uint8_t i = 0; i < numPoints; i++)
+    {
+        // Extraer offsets en metros (int16, little-endian)
+        int16_t latOffsetMeters = data[dataIndex] | (data[dataIndex + 1] << 8);
+        int16_t lngOffsetMeters = data[dataIndex + 2] | (data[dataIndex + 3] << 8);
+
+        // Convertir offsets de metros a grados
+        float latOffsetDegrees = (float)latOffsetMeters / LAT_SCALE_FACTOR;
+        float lngOffsetDegrees = (float)lngOffsetMeters / LNG_SCALE_FACTOR;
+
+        // Calcular coordenadas absolutas
+        float lat = refLat + latOffsetDegrees;
+        float lng = refLng + lngOffsetDegrees;
+
+        points[i] = GeoPoint(lat, lng);
+        dataIndex += 4;
+
+        LOG_I("  Punto %d: %.6f, %.6f (offset: %dm, %dm)",
+              i, lat, lng, latOffsetMeters, lngOffsetMeters);
+    }
+
+    // Extraer groupId si está presente
+    char groupId[16] = "backend";
+    if (length > expectedMinLength)
+    {
+        size_t groupIdLen = min((size_t)15, length - expectedMinLength);
+        memcpy(groupId, &data[expectedMinLength], groupIdLen);
+        groupId[groupIdLen] = '\0';
+    }
+
+    LOG_I("  Grupo: %s", groupId);
+
+    // Llamar al callback para actualizar la geocerca
+    if (geofenceUpdateCallback)
+    {
+        GeofenceUpdate update;
+        update.type = 2; // Polígono comprimido (puedes usar 1 si quieres tratarlo igual que polígono normal)
+        update.pointCount = numPoints;
+        update.radius = 0.0f;
+
+        // Copiar puntos y calcular centro
+        double sumLat = 0.0, sumLng = 0.0;
+        for (uint8_t i = 0; i < numPoints; i++)
+        {
+            update.points[i].lat = points[i].lat;
+            update.points[i].lng = points[i].lng;
+            sumLat += points[i].lat;
+            sumLng += points[i].lng;
+        }
+
+        // El centro debería ser muy similar al punto de referencia usado en la compresión
+        update.centerLat = sumLat / numPoints;
+        update.centerLng = sumLng / numPoints;
+
+        strncpy(update.name, "CompressedPolygon", sizeof(update.name) - 1);
+        strncpy(update.groupId, groupId, sizeof(update.groupId) - 1);
+        update.name[sizeof(update.name) - 1] = '\0';
+        update.groupId[sizeof(update.groupId) - 1] = '\0';
+
+        geofenceUpdateCallback(update);
+        LOG_I("✅ Geocerca poligonal comprimida actualizada");
+
+        // Log de verificación de la descompresión
+        LOG_I("🔍 Verificación de descompresión:");
+        LOG_I("  Centro calculado: %.6f, %.6f", update.centerLat, update.centerLng);
+        LOG_I("  Diferencia con referencia: %.2fm lat, %.2fm lng",
+              (update.centerLat - refLat) * LAT_SCALE_FACTOR,
+              (update.centerLng - refLng) * LNG_SCALE_FACTOR);
+    }
+    else
+    {
+        LOG_W("⚠️ Callback de geocerca no configurado");
+    }
+}
 // ============================================================================
 // GESTIÓN DE ERRORES
 // ============================================================================

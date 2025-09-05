@@ -207,6 +207,7 @@ private:
     // NUEVO: Decodificación específica para polígonos
     void parseCircleGeofence(const uint8_t *data, size_t length);
     void parsePolygonGeofence(const uint8_t *data, size_t length);
+    void parseCompressedPolygonGeofence(const uint8_t *data, size_t length);
 
     // Gestión de errores
     void handleRadioError(int16_t errorCode);
