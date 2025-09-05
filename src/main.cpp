@@ -155,18 +155,56 @@ void handleButton()
 // ============================================================================
 void onGeofenceUpdate(const GeofenceUpdate &update)
 {
+    Serial.println(F("🔍 DEBUG: onGeofenceUpdate llamado"));
+    Serial.print(F("   • Tipo recibido: "));
+    Serial.println(update.type);
+    Serial.print(F("   • Nombre: "));
+    Serial.println(update.name);
+    Serial.print(F("   • Puntos: "));
+    Serial.println(update.pointCount);
+
     Serial.print(F("🌐 Geocerca actualizada: "));
     Serial.println(update.name);
-    Serial.print(F("   • Centro: "));
-    Serial.print(update.centerLat, 6);
-    Serial.print(F(", "));
-    Serial.println(update.centerLng, 6);
-    Serial.print(F("   • Radio: "));
-    Serial.print(update.radius);
-    Serial.println(F(" metros"));
 
-    // Guardar la geocerca
-    geofenceManager.setGeofence(update.centerLat, update.centerLng, update.radius, update.name);
+    if (update.type == 0)
+    {
+        // CÍRCULO
+        Serial.print(F("   • Tipo: CÍRCULO"));
+        Serial.print(F("   • Centro: "));
+        Serial.print(update.centerLat, 6);
+        Serial.print(F(", "));
+        Serial.println(update.centerLng, 6);
+        Serial.print(F("   • Radio: "));
+        Serial.print(update.radius);
+        Serial.println(F(" metros"));
+
+        geofenceManager.setGeofence(update.centerLat, update.centerLng,
+                                    update.radius, update.name);
+    }
+    else if (update.type == 1)
+    {
+        // POLÍGONO
+        Serial.print(F("   • Tipo: POLÍGONO"));
+        Serial.print(F("   • Puntos: "));
+        Serial.println(update.pointCount);
+
+        // Convertir estructura GeofenceUpdate a GeoPoint[]
+        GeoPoint points[10];
+        for (uint8_t i = 0; i < update.pointCount; i++)
+        {
+            points[i].lat = update.points[i].lat;
+            points[i].lng = update.points[i].lng;
+            Serial.print(F("     P"));
+            Serial.print(i);
+            Serial.print(F(": "));
+            Serial.print(points[i].lat, 6);
+            Serial.print(F(", "));
+            Serial.println(points[i].lng, 6);
+        }
+
+        geofenceManager.setPolygonGeofence(points, update.pointCount,
+                                           update.name, update.groupId);
+    }
 
     // Feedback visual y sonoro
     blinkLED(3, 200);
