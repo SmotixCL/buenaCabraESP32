@@ -1129,6 +1129,7 @@ void RadioManager::processDownlink(const uint8_t *data, size_t length, uint8_t p
     // Ejecutar callback personalizado si existe
     if (downlinkCallback)
     {
+        LOG_D("Ejecutamos el callback personalizado downlinkCallback");
         downlinkCallback(data, length, port);
     }
 }

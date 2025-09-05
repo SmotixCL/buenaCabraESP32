@@ -727,12 +727,6 @@ void loop()
         lastSerialStatus = now;
     }
 
-    // Procesar downlinks
-    if (radioManager.isInitialized())
-    {
-        radioManager.processDownlinks();
-    }
-
     // Manejar botón
     handleButton();
 
