@@ -42,5 +42,7 @@
         "**/node_modules": true,
         "**/.pio": true,
         "**/backup_original": true
-    }
+    },
+    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "python-envs.pythonProjects": []
 }

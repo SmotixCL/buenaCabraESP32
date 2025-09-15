@@ -166,9 +166,9 @@ void onGeofenceUpdate(const GeofenceUpdate &update)
     Serial.print(F("🌐 Geocerca actualizada: "));
     Serial.println(update.name);
 
+    // GEOCERCA CIRCULAR
     if (update.type == 0)
     {
-        // CÍRCULO
         Serial.print(F("   • Tipo: CÍRCULO"));
         Serial.print(F("   • Centro: "));
         Serial.print(update.centerLat, 6);
@@ -181,9 +181,9 @@ void onGeofenceUpdate(const GeofenceUpdate &update)
         geofenceManager.setGeofence(update.centerLat, update.centerLng,
                                     update.radius, update.name);
     }
+    // GEOCERCA POLIGONAL SIN COMPRIMIR
     else if (update.type == 1)
     {
-        // POLÍGONO
         Serial.print(F("   • Tipo: POLÍGONO"));
         Serial.print(F("   • Puntos: "));
         Serial.println(update.pointCount);
@@ -204,6 +204,17 @@ void onGeofenceUpdate(const GeofenceUpdate &update)
 
         geofenceManager.setPolygonGeofence(points, update.pointCount,
                                            update.name, update.groupId);
+    }
+    // POLÍGONO COMPRIMIDO - tratar igual que polígono normal
+    else if (update.type == 2)
+    {
+        GeoPoint points[10];
+        for (uint8_t i = 0; i < update.pointCount; i++)
+        {
+            points[i].lat = update.points[i].lat;
+            points[i].lng = update.points[i].lng;
+        }
+        geofenceManager.setPolygonGeofence(points, update.pointCount, update.name, update.groupId);
     }
 
     // Feedback visual y sonoro
