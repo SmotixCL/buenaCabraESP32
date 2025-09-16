@@ -478,31 +478,11 @@ void updateDisplay()
     powerManager.readBattery();
     batteryStatus = powerManager.getBatteryStatus();
 
-    // Determinar nivel de alerta
-    AlertLevel alertLevel = AlertLevel::SAFE;
-    if (geofenceManager.getGeofence().isConfigured)
-    {
-        float distance = geofenceManager.getDistance(currentPosition);
-        bool inside = geofenceManager.isInsideGeofence(currentPosition);
-
-        if (!inside)
-        {
-            if (distance > 500)
-                alertLevel = AlertLevel::EMERGENCY;
-            else if (distance > 300)
-                alertLevel = AlertLevel::DANGER;
-            else if (distance > 150)
-                alertLevel = AlertLevel::WARNING;
-            else
-                alertLevel = AlertLevel::CAUTION;
-        }
-    }
-
     // Mostrar pantalla según selección
     switch (currentScreen)
     {
     case 0:
-        displayManager.showMainScreen(systemStatus, currentPosition, batteryStatus, alertLevel);
+        displayManager.showMainScreen(systemStatus, currentPosition, batteryStatus, alertManager.getCurrentLevel());
         break;
     case 1:
         displayManager.showGPSDetailScreen(currentPosition);
@@ -779,31 +759,19 @@ void loop()
     // Manejar botón
     handleButton();
 
-    // Verificar geocerca si está configurada
+    // Verificar distancia a geocerca si está configurada.
     if (geofenceManager.getGeofence().isConfigured && gpsHasFix)
     {
-        static uint32_t lastGeofenceCheck = 0;
+        // Inicializamos lastGeofenceCheck así, en vez de en 0, para asegurar la primera ejecución
+        static uint32_t lastGeofenceCheck = millis() - 10000;
+
+        // Si han pasado más de 10 segundos desde el último check, volver a chequear distancia
         if (now - lastGeofenceCheck > 10000)
-        { // Cada 10 segundos
-            bool inside = geofenceManager.isInsideGeofence(currentPosition);
+        {
+            LOG_D("⏰ Han pasado 10s. Ejecutando el update de la alerta con la distancia actual");
+            // Actualizamos el nivel de alerta en base a la distancia a la geocerca
             float distance = geofenceManager.getDistance(currentPosition);
-
-            if (!inside && distance > 100)
-            {
-                static uint32_t lastAlert = 0;
-                if (now - lastAlert > 60000)
-                { // Alerta cada minuto máximo
-                    Serial.print(F("🚨 ALERTA: Fuera de geocerca! Distancia: "));
-                    Serial.print(distance);
-                    Serial.println(F(" metros"));
-
-                    if (buzzerManager.isInitialized())
-                    {
-                        buzzerManager.playAlertTone(AlertLevel::WARNING);
-                    }
-                    lastAlert = now;
-                }
-            }
+            alertManager.update(distance);
             lastGeofenceCheck = now;
         }
     }

@@ -30,7 +30,7 @@
 // ============================================================================
 #define GPS_UPDATE_INTERVAL 5000
 #define BATTERY_CHECK_INTERVAL 60000
-#define DISPLAY_UPDATE_INTERVAL 2000
+#define DISPLAY_UPDATE_INTERVAL 4000
 #define LORA_TX_INTERVAL 60000
 #define HEARTBEAT_INTERVAL 10000
 #define SERIAL_STATUS_INTERVAL 30000
@@ -60,20 +60,9 @@
 #define BUZZER_PWM_RESOLUTION 8
 
 // ============================================================================
-// CONFIGURACIÓN DE GEOCERCA
+// CONFIGURACIÓN DE GEOCERCA (Distancias de alerta movidas a AlertManager.h)
 // ============================================================================
 #define GEOFENCE_MAX_NAME_LENGTH 32
-#define DISTANCE_SAFE 0
-#define DISTANCE_CAUTION 50
-#define DISTANCE_WARNING 150
-#define DISTANCE_DANGER 300
-#define DISTANCE_EMERGENCY 500
-
-// Alias para compatibilidad
-#define CAUTION_DISTANCE DISTANCE_CAUTION
-#define WARNING_DISTANCE DISTANCE_WARNING
-#define DANGER_DISTANCE DISTANCE_DANGER
-#define EMERGENCY_DISTANCE DISTANCE_EMERGENCY
 
 // Límites de geocerca
 #define MIN_GEOFENCE_RADIUS 10.0f

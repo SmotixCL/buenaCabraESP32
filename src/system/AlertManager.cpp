@@ -5,58 +5,62 @@
 // CONSTRUCTOR E INICIALIZACIÓN
 // ============================================================================
 
-AlertManager::AlertManager(BuzzerManager& buzzer, DisplayManager& display) :
-    buzzerManager(buzzer),
-    displayManager(display),
-    initialized(false),
-    enabled(true),
-    currentLevel(AlertLevel::SAFE),
-    previousLevel(AlertLevel::SAFE),
-    alertActive(false),
-    currentDistance(0.0f),
-    alertStartTime(0),
-    lastAlertTime(0),
-    totalAlertsTriggered(0),
-    maxLevelReached(AlertLevel::SAFE),
-    escalationEnabled(true),
-    autoStopEnabled(true),
-    displayAlertsEnabled(false), // 🔥 DESHABILITADO - No mostrar pantallas emergentes
-    audioAlertsEnabled(true),
-    levelStartTime(0),
-    escalationPending(false),
-    currentAlertType(ALERT_GEOFENCE),
-    alertCallback(nullptr),
-    escalationCallback(nullptr)
+AlertManager::AlertManager(BuzzerManager &buzzer, DisplayManager &display) : buzzerManager(buzzer),
+                                                                             displayManager(display),
+                                                                             initialized(false),
+                                                                             enabled(true),
+                                                                             currentLevel(AlertLevel::SAFE),
+                                                                             previousLevel(AlertLevel::SAFE),
+                                                                             alertActive(false),
+                                                                             currentDistance(0.0f),
+                                                                             alertStartTime(0),
+                                                                             lastAlertTime(0),
+                                                                             totalAlertsTriggered(0),
+                                                                             maxLevelReached(AlertLevel::SAFE),
+                                                                             escalationEnabled(true),
+                                                                             autoStopEnabled(true),
+                                                                             displayAlertsEnabled(false), // 🔥 DESHABILITADO - No mostrar pantallas emergentes
+                                                                             audioAlertsEnabled(true),
+                                                                             levelStartTime(0),
+                                                                             escalationPending(false),
+                                                                             currentAlertType(ALERT_GEOFENCE),
+                                                                             alertCallback(nullptr),
+                                                                             escalationCallback(nullptr)
 {
     strcpy(currentReason, "Sistema OK");
     initializeThresholds();
 }
 
-Result AlertManager::init() {
-    if (initialized) {
+Result AlertManager::init()
+{
+    if (initialized)
+    {
         return Result::SUCCESS;
     }
-    
+
     LOG_I("🚨 Inicializando Alert Manager...");
-    
+
     // Verificar que los managers requeridos estén inicializados
-    if (!buzzerManager.isInitialized()) {
+    if (!buzzerManager.isInitialized())
+    {
         LOG_E("❌ BuzzerManager no inicializado");
         return Result::ERROR_INIT;
     }
-    
-    if (!displayManager.isInitialized()) {
+
+    if (!displayManager.isInitialized())
+    {
         LOG_E("❌ DisplayManager no inicializado");
         return Result::ERROR_INIT;
     }
-    
+
     initialized = true;
     LOG_INIT("Alert Manager", true);
-    
+
     return Result::SUCCESS;
 }
 
-bool AlertManager::isInitialized() const {
+bool AlertManager::isInitialized() const
+{
     return initialized;
 }
 
@@ -64,67 +68,83 @@ bool AlertManager::isInitialized() const {
 // CONTROL PRINCIPAL DE ALERTAS
 // ============================================================================
 
-void AlertManager::update(float distanceToGeofence) {
-    if (!initialized || !enabled) return;
-    
+void AlertManager::update(float distanceToGeofence)
+{
+    if (!initialized || !enabled)
+        return;
+
     AlertLevel newLevel = calculateGeofenceLevel(distanceToGeofence);
     setAlertLevel(newLevel, distanceToGeofence);
     currentAlertType = ALERT_GEOFENCE;
 }
 
-void AlertManager::setAlertLevel(AlertLevel level, float distance) {
-    if (!initialized || !isValidLevel(level)) return;
-    
+void AlertManager::setAlertLevel(AlertLevel level, float distance)
+{
+    if (!initialized || !isValidLevel(level))
+        return;
+
     previousLevel = currentLevel;
     currentLevel = level;
     currentDistance = distance;
-    
+
     // Actualizar estadísticas
-    if (level > maxLevelReached) {
+    if (level > maxLevelReached)
+    {
         maxLevelReached = level;
     }
-    
+
     // Detectar inicio/fin de alerta
-    bool wasAlerting = alertActive;
-    alertActive = (level > AlertLevel::SAFE);
-    
-    if (alertActive && !wasAlerting) {
+    bool wasAlerting = alertActive;           // wasAlerting: Estado previo
+    alertActive = (level > AlertLevel::SAFE); // alertActive: Estado actual
+
+    // Dar inicio si ahora hay que alertar y previamente no estábamos alertando
+    if (alertActive && !wasAlerting)
+    {
         // Inicio de nueva alerta
         alertStartTime = millis();
         lastAlertTime = alertStartTime;
         totalAlertsTriggered++;
         levelStartTime = alertStartTime;
         escalationPending = false;
-        
-        LOG_I("🚨 Alerta iniciada - Nivel: %s, Distancia: %.1fm", 
+
+        LOG_I("🚨 Alerta iniciada - Nivel: %s, Distancia: %.1fm",
               alertLevelToString(level), distance);
-    } else if (!alertActive && wasAlerting) {
+
+        buzzerManager.startContinuousAlert(level);
+    }
+    // Finalizar si ahora no hay que alertar y previamente estábamos alertando
+    else if (!alertActive && wasAlerting)
+    {
         // Fin de alerta
         uint32_t duration = millis() - alertStartTime;
         LOG_I("✅ Alerta finalizada - Duración: %lu segundos", duration / 1000);
-        
+
         // Detener alertas activas
         buzzerManager.stopContinuousAlert();
     }
-    
+
     // Detectar cambio de nivel
-    if (level != previousLevel) {
+    if (level != previousLevel)
+    {
         onLevelChange(previousLevel, level);
         levelStartTime = millis();
         escalationPending = false;
     }
-    
+
     // Ejecutar alerta
-    if (alertActive) {
+    if (alertActive)
+    {
         executeAlert();
     }
 }
 
-AlertLevel AlertManager::getCurrentLevel() const {
+AlertLevel AlertManager::getCurrentLevel() const
+{
     return currentLevel;
 }
 
-bool AlertManager::isAlerting() const {
+bool AlertManager::isAlerting() const
+{
     return alertActive;
 }
 
@@ -132,20 +152,24 @@ bool AlertManager::isAlerting() const {
 // CONTROL MANUAL DE ALERTAS
 // ============================================================================
 
-void AlertManager::startAlert(AlertLevel level, float distance) {
+void AlertManager::startAlert(AlertLevel level, float distance)
+{
     copyReason("Alerta manual");
     currentAlertType = ALERT_MANUAL;
     setAlertLevel(level, distance);
 }
 
-void AlertManager::stopAlert() {
-    if (alertActive) {
+void AlertManager::stopAlert()
+{
+    if (alertActive)
+    {
         setAlertLevel(AlertLevel::SAFE, 0.0f);
         copyReason("Sistema OK");
     }
 }
 
-void AlertManager::stopAllAlerts() {
+void AlertManager::stopAllAlerts()
+{
     stopAlert();
     buzzerManager.stopContinuousAlert();
     escalationPending = false;
@@ -155,68 +179,57 @@ void AlertManager::stopAllAlerts() {
 // TIPOS ESPECÍFICOS DE ALERTAS
 // ============================================================================
 
-void AlertManager::triggerGeofenceAlert(float distance) {
+void AlertManager::triggerGeofenceAlert(float distance)
+{
     currentAlertType = ALERT_GEOFENCE;
     snprintf(currentReason, sizeof(currentReason), "Geocerca: %.1fm", distance);
-    
+
     AlertLevel level = calculateGeofenceLevel(distance);
     setAlertLevel(level, distance);
 }
 
-void AlertManager::triggerBatteryAlert(const BatteryStatus& battery) {
+void AlertManager::triggerBatteryAlert(const BatteryStatus &battery)
+{
     currentAlertType = ALERT_BATTERY;
     snprintf(currentReason, sizeof(currentReason), "Batería: %.2fV", battery.voltage);
-    
+
     AlertLevel level = calculateBatteryLevel(battery);
     setAlertLevel(level, 0.0f);
 }
 
-void AlertManager::triggerSystemAlert(const char* message, AlertLevel level) {
+void AlertManager::triggerSystemAlert(const char *message, AlertLevel level)
+{
     currentAlertType = ALERT_SYSTEM;
     copyReason(message);
     setAlertLevel(level, 0.0f);
-}
-
-void AlertManager::triggerEmergencyAlert(const char* reason) {
-    currentAlertType = ALERT_EMERGENCY;
-    copyReason(reason);
-    setAlertLevel(AlertLevel::EMERGENCY, 0.0f);
-    
-    LOG_E("🚨 EMERGENCIA: %s", reason);
 }
 
 // ============================================================================
 // CONFIGURACIÓN
 // ============================================================================
 
-void AlertManager::setEnabled(bool enabled) {
+void AlertManager::setEnabled(bool enabled)
+{
     this->enabled = enabled;
-    
-    if (!enabled) {
+
+    if (!enabled)
+    {
         stopAllAlerts();
     }
-    
+
     LOG_I("🚨 Sistema de alertas %s", enabled ? "habilitado" : "deshabilitado");
 }
 
-bool AlertManager::isEnabled() const {
+bool AlertManager::isEnabled() const
+{
     return enabled;
 }
 
-void AlertManager::setGeofenceThresholds(float caution, float warning, float danger, float emergency) {
-    thresholds.geofenceCaution = caution;
-    thresholds.geofenceWarning = warning;
-    thresholds.geofenceDanger = danger;
-    thresholds.geofenceEmergency = emergency;
-    
-    LOG_I("🚨 Umbrales geocerca actualizados: %.1f/%.1f/%.1f/%.1fm", 
-          caution, warning, danger, emergency);
-}
-
-void AlertManager::setBatteryThresholds(float lowVoltage, float criticalVoltage) {
+void AlertManager::setBatteryThresholds(float lowVoltage, float criticalVoltage)
+{
     thresholds.batteryLow = lowVoltage;
     thresholds.batteryCritical = criticalVoltage;
-    
+
     LOG_I("🚨 Umbrales batería actualizados: %.2f/%.2fV", lowVoltage, criticalVoltage);
 }
 
@@ -224,24 +237,30 @@ void AlertManager::setBatteryThresholds(float lowVoltage, float criticalVoltage)
 // CONFIGURACIÓN DE COMPORTAMIENTO
 // ============================================================================
 
-void AlertManager::setEscalationEnabled(bool enabled) {
+void AlertManager::setEscalationEnabled(bool enabled)
+{
     escalationEnabled = enabled;
-    if (!enabled) {
+    if (!enabled)
+    {
         escalationPending = false;
     }
 }
 
-void AlertManager::setAutoStopEnabled(bool enabled) {
+void AlertManager::setAutoStopEnabled(bool enabled)
+{
     autoStopEnabled = enabled;
 }
 
-void AlertManager::setDisplayAlertsEnabled(bool enabled) {
+void AlertManager::setDisplayAlertsEnabled(bool enabled)
+{
     displayAlertsEnabled = enabled;
 }
 
-void AlertManager::setAudioAlertsEnabled(bool enabled) {
+void AlertManager::setAudioAlertsEnabled(bool enabled)
+{
     audioAlertsEnabled = enabled;
-    if (!enabled) {
+    if (!enabled)
+    {
         buzzerManager.stopContinuousAlert();
     }
 }
@@ -250,21 +269,27 @@ void AlertManager::setAudioAlertsEnabled(bool enabled) {
 // ESTADÍSTICAS
 // ============================================================================
 
-uint32_t AlertManager::getTotalAlertsTriggered() const {
+uint32_t AlertManager::getTotalAlertsTriggered() const
+{
     return totalAlertsTriggered;
 }
 
-uint32_t AlertManager::getAlertDuration() const {
-    if (!alertActive) return 0;
+uint32_t AlertManager::getAlertDuration() const
+{
+    if (!alertActive)
+        return 0;
     return millis() - alertStartTime;
 }
 
-uint32_t AlertManager::getTimeSinceLastAlert() const {
-    if (alertActive) return 0;
+uint32_t AlertManager::getTimeSinceLastAlert() const
+{
+    if (alertActive)
+        return 0;
     return millis() - lastAlertTime;
 }
 
-AlertLevel AlertManager::getMaxLevelReached() const {
+AlertLevel AlertManager::getMaxLevelReached() const
+{
     return maxLevelReached;
 }
 
@@ -272,19 +297,23 @@ AlertLevel AlertManager::getMaxLevelReached() const {
 // CALLBACKS Y CONFIGURACIÓN
 // ============================================================================
 
-void AlertManager::setAlertCallback(AlertCallback callback) {
+void AlertManager::setAlertCallback(AlertCallback callback)
+{
     alertCallback = callback;
 }
 
-void AlertManager::setEscalationCallback(EscalationCallback callback) {
+void AlertManager::setEscalationCallback(EscalationCallback callback)
+{
     escalationCallback = callback;
 }
 
-void AlertManager::setEscalationConfig(const EscalationConfig& config) {
+void AlertManager::setEscalationConfig(const EscalationConfig &config)
+{
     escalationConfig = config;
 }
 
-AlertManager::EscalationConfig AlertManager::getEscalationConfig() const {
+AlertManager::EscalationConfig AlertManager::getEscalationConfig() const
+{
     return escalationConfig;
 }
 
@@ -292,14 +321,17 @@ AlertManager::EscalationConfig AlertManager::getEscalationConfig() const {
 // UPDATE LOOP
 // ============================================================================
 
-void AlertManager::update() {
-    if (!initialized) return;
-    
+void AlertManager::update()
+{
+    if (!initialized)
+        return;
+
     // Actualizar escalada automática
-    if (escalationEnabled && alertActive) {
+    if (escalationEnabled && alertActive)
+    {
         updateEscalation();
     }
-    
+
     // Actualizar managers de hardware
     buzzerManager.update();
 }
@@ -308,37 +340,46 @@ void AlertManager::update() {
 // MÉTODOS PRIVADOS
 // ============================================================================
 
-void AlertManager::initializeThresholds() {
+void AlertManager::initializeThresholds()
+{
     // Configurar umbrales por defecto basados en constantes
     thresholds.geofenceCaution = CAUTION_DISTANCE;
     thresholds.geofenceWarning = WARNING_DISTANCE;
-    thresholds.geofenceDanger = DANGER_DISTANCE;
-    thresholds.geofenceEmergency = EMERGENCY_DISTANCE;
     thresholds.batteryLow = BATTERY_LOW;
     thresholds.batteryCritical = BATTERY_CRITICAL;
 }
 
-AlertLevel AlertManager::calculateGeofenceLevel(float distance) const {
-    // Distancia negativa significa dentro de la geocerca
-    if (distance <= thresholds.geofenceEmergency) {
-        return AlertLevel::EMERGENCY;
-    } else if (distance <= thresholds.geofenceDanger) {
-        return AlertLevel::DANGER;
-    } else if (distance <= thresholds.geofenceWarning) {
+AlertLevel AlertManager::calculateGeofenceLevel(float distance) const
+{
+    // Distancia negativa significa dentro de la geocerca. Entra en el último caso.
+
+    // Distancia positiva significa fuera de la geocerca - A MAYOR distancia, MAYOR alerta
+    if (distance >= thresholds.geofenceWarning)
+    {
         return AlertLevel::WARNING;
-    } else if (distance <= thresholds.geofenceCaution) {
+    }
+    else if (distance >= thresholds.geofenceCaution)
+    {
         return AlertLevel::CAUTION;
-    } else {
-        return AlertLevel::SAFE;
+    }
+    else
+    {
+        return AlertLevel::SAFE; // Dentro o muy cerca de la geocerca
     }
 }
 
-AlertLevel AlertManager::calculateBatteryLevel(const BatteryStatus& battery) const {
-    if (battery.voltage <= thresholds.batteryCritical) {
-        return AlertLevel::EMERGENCY;
-    } else if (battery.voltage <= thresholds.batteryLow) {
+AlertLevel AlertManager::calculateBatteryLevel(const BatteryStatus &battery) const
+{
+    if (battery.voltage <= thresholds.batteryCritical)
+    {
         return AlertLevel::WARNING;
-    } else {
+    }
+    else if (battery.voltage <= thresholds.batteryLow)
+    {
+        return AlertLevel::CAUTION;
+    }
+    else
+    {
         return AlertLevel::SAFE;
     }
 }
@@ -347,45 +388,60 @@ AlertLevel AlertManager::calculateBatteryLevel(const BatteryStatus& battery) con
 // GESTIÓN DE ESCALADA
 // ============================================================================
 
-void AlertManager::updateEscalation() {
-    if (!escalationConfig.enabled || !alertActive) return;
-    
+void AlertManager::updateEscalation()
+{
+    if (!escalationConfig.enabled || !alertActive)
+    {
+        LOG_D("No se actualizó la escalación de alerta");
+        return;
+    }
+
     uint32_t timeInLevel = millis() - levelStartTime;
-    
-    if (shouldEscalate() && timeInLevel >= escalationConfig.timeToEscalate) {
+
+    if (shouldEscalate() && timeInLevel >= escalationConfig.timeToEscalate)
+    {
+        LOG_D("Se actualizó la escalación de alerta");
         escalateAlert();
     }
 }
 
-void AlertManager::escalateAlert() {
+void AlertManager::escalateAlert()
+{
     AlertLevel nextLevel = getNextLevel(currentLevel);
-    
-    if (nextLevel != currentLevel) {
-        LOG_W("🚨 Escalando alerta: %s -> %s", 
+
+    if (nextLevel != currentLevel)
+    {
+        LOG_W("🚨 Escalando alerta: %s -> %s",
               alertLevelToString(currentLevel), alertLevelToString(nextLevel));
-        
+
         AlertLevel oldLevel = currentLevel;
         setAlertLevel(nextLevel, currentDistance);
-        
-        if (escalationCallback) {
+
+        if (escalationCallback)
+        {
             escalationCallback(oldLevel, nextLevel);
         }
     }
 }
 
-bool AlertManager::shouldEscalate() const {
-    return currentLevel < AlertLevel::EMERGENCY && // No escalar más allá de emergency
+bool AlertManager::shouldEscalate() const
+{
+    return currentLevel < AlertLevel::WARNING && // No escalar más allá de warning
            (millis() - levelStartTime) >= escalationConfig.timeToEscalate;
 }
 
-AlertLevel AlertManager::getNextLevel(AlertLevel current) const {
-    switch (current) {
-        case AlertLevel::SAFE:      return AlertLevel::CAUTION;
-        case AlertLevel::CAUTION:   return AlertLevel::WARNING;
-        case AlertLevel::WARNING:   return AlertLevel::DANGER;
-        case AlertLevel::DANGER:    return AlertLevel::EMERGENCY;
-        case AlertLevel::EMERGENCY: return AlertLevel::EMERGENCY; // Ya en máximo
-        default:                    return current;
+AlertLevel AlertManager::getNextLevel(AlertLevel current) const
+{
+    switch (current)
+    {
+    case AlertLevel::SAFE:
+        return AlertLevel::CAUTION;
+    case AlertLevel::CAUTION:
+        return AlertLevel::WARNING;
+    case AlertLevel::WARNING:
+        return AlertLevel::WARNING; // MÁXIMO
+    default:
+        return current;
     }
 }
 
@@ -393,63 +449,67 @@ AlertLevel AlertManager::getNextLevel(AlertLevel current) const {
 // EJECUCIÓN DE ALERTAS
 // ============================================================================
 
-void AlertManager::executeAlert() {
-    if (!alertActive) return;
-    
+void AlertManager::executeAlert()
+{
+    if (!alertActive)
+        return;
+
     // Actualizar buzzer solamente - sin interrumpir pantallas
-    if (audioAlertsEnabled) {
+    if (audioAlertsEnabled)
+    {
+        LOG_D("Ejecutamos updateBuzzer() dentro de executeAlert");
         updateBuzzer();
     }
-    
+
     // 🔥 ELIMINADO: updateDisplay() - Ya no interrumpe las pantallas predefinidas
-    
-    // Log periódico
-    static uint32_t lastLog = 0;
-    if (millis() - lastLog > 10000) { // Log cada 10 segundos
-        logAlert();
-        lastLog = millis();
-    }
+
+    // Log de que ejecutamos la Alerta
+    LOG_GEOFENCE(currentDistance, static_cast<uint8_t>(currentLevel));
 }
 
-void AlertManager::updateDisplay() {
+void AlertManager::updateDisplay()
+{
     // 🔥 MÉTODO DESHABILITADO - No mostrar pantallas emergentes de alerta
     // La información de alerta ahora se muestra solo en la pantalla principal
     // como parte del estado normal del sistema, sin interrumpir la navegación
-    
+
     // Las alertas se pueden ver en:
     // 1. Pantalla principal: Muestra el nivel de alerta actual
     // 2. Pantalla de geocerca: Muestra el estado y distancia
     // 3. Audio: Buzzer sigue funcionando para alertas sonoras
 }
 
-void AlertManager::updateBuzzer() {
-    // Iniciar alerta continua en el buzzer
-    if (!buzzerManager.isPlaying()) {
-        buzzerManager.startContinuousAlert(currentLevel);
+void AlertManager::updateBuzzer()
+{
+    // Ejecutar el update cuando la alerta continua está activa
+    if (buzzerManager.isContinousAlertActive())
+    {
+        LOG_D("Ejecutamos updateContinuousAlert");
+        buzzerManager.updateContinuousAlert();
     }
-}
-
-void AlertManager::logAlert() {
-    LOG_GEOFENCE(currentDistance, static_cast<uint8_t>(currentLevel));
 }
 
 // ============================================================================
 // CALLBACKS Y EVENTOS
 // ============================================================================
 
-void AlertManager::triggerCallbacks() {
-    if (alertCallback) {
+void AlertManager::triggerCallbacks()
+{
+    if (alertCallback)
+    {
         alertCallback(currentLevel, currentDistance, currentReason);
     }
 }
 
-void AlertManager::onLevelChange(AlertLevel oldLevel, AlertLevel newLevel) {
-    LOG_I("🚨 Cambio nivel alerta: %s -> %s", 
+void AlertManager::onLevelChange(AlertLevel oldLevel, AlertLevel newLevel)
+{
+    LOG_I("🚨 Cambio nivel alerta: %s -> %s",
           alertLevelToString(oldLevel), alertLevelToString(newLevel));
-    
+
     triggerCallbacks();
-    
-    if (escalationCallback && newLevel > oldLevel) {
+
+    if (escalationCallback && newLevel > oldLevel)
+    {
         escalationCallback(oldLevel, newLevel);
     }
 }
@@ -458,23 +518,32 @@ void AlertManager::onLevelChange(AlertLevel oldLevel, AlertLevel newLevel) {
 // UTILIDADES
 // ============================================================================
 
-bool AlertManager::isValidLevel(AlertLevel level) const {
-    return level >= AlertLevel::SAFE && level <= AlertLevel::EMERGENCY;
+bool AlertManager::isValidLevel(AlertLevel level) const
+{
+    return level >= AlertLevel::SAFE && level <= AlertLevel::WARNING;
 }
 
-const char* AlertManager::getAlertTypeString(AlertType type) const {
-    switch (type) {
-        case ALERT_GEOFENCE:    return "Geocerca";
-        case ALERT_BATTERY:     return "Batería";
-        case ALERT_SYSTEM:      return "Sistema";
-        case ALERT_EMERGENCY:   return "Emergencia";
-        case ALERT_MANUAL:      return "Manual";
-        default:                return "Desconocido";
+const char *AlertManager::getAlertTypeString(AlertType type) const
+{
+    switch (type)
+    {
+    case ALERT_GEOFENCE:
+        return "Geocerca";
+    case ALERT_BATTERY:
+        return "Batería";
+    case ALERT_SYSTEM:
+        return "Sistema";
+    case ALERT_MANUAL:
+        return "Manual";
+    default:
+        return "Desconocido";
     }
 }
 
-void AlertManager::copyReason(const char* reason) {
-    if (reason) {
+void AlertManager::copyReason(const char *reason)
+{
+    if (reason)
+    {
         strncpy(currentReason, reason, sizeof(currentReason) - 1);
         currentReason[sizeof(currentReason) - 1] = '\0';
     }
